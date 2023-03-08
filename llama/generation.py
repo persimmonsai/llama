@@ -25,9 +25,9 @@ class Llama:
         local_rank = int(os.environ.get("LOCAL_RANK", -1))
         world_size = int(os.environ.get("WORLD_SIZE", -1))
 
-        torch.distributed.init_process_group("nccl")
+        torch.distributed.init_process_group("gloo")
         initialize_model_parallel(world_size)
-        torch.cuda.set_device(local_rank)
+#        torch.cuda.set_device(local_rank)
 
         # seed must be the same in all processes
         torch.manual_seed(1)
@@ -51,10 +51,11 @@ class Llama:
         )
         tokenizer = Tokenizer(model_path=tokenizer_path)
         model_args.vocab_size = tokenizer.n_words
-        torch.set_default_tensor_type(torch.cuda.HalfTensor)
+        torch.set_default_tensor_type(torch.HalfTensor)
         model = Transformer(model_args)
         torch.set_default_tensor_type(torch.FloatTensor)
         model.load_state_dict(checkpoint, strict=False)
+        model = model.to("mps")
 
         generator = Llama(model, tokenizer)
         print(f"Loaded in {time.time() - start_time:.2f} seconds")
@@ -82,9 +83,9 @@ class Llama:
 
         total_len = min(params.max_seq_len, max_gen_len + max_prompt_size)
 
-        tokens = torch.full((bsz, total_len), self.tokenizer.pad_id).cuda().long()
+        tokens = torch.full((bsz, total_len), self.tokenizer.pad_id).long().to("mps")
         for k, t in enumerate(prompt_tokens):
-            tokens[k, : len(t)] = torch.tensor(t).long()
+            tokens[k, : len(t)] = torch.tensor(t).long().to("mps")
         input_text_mask = tokens != self.tokenizer.pad_id
         start_pos = min_prompt_size
         prev_pos = 0

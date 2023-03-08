@@ -13,6 +13,10 @@ def main(
     tokenizer_path: str,
     temperature: float = 0.8,
     top_p: float = 0.95,
+    use_repetition_penalty = True,
+    repetition_penalty_range: int = 1024,
+    repetition_penalty_slope: float = 0,
+    repetition_penalty: float = 1.15,
     max_seq_len: int = 512,
     max_batch_size: int = 1):
 
@@ -27,7 +31,14 @@ def main(
 
             queryTime = time.time()
             generator = Generator(llama.model, llama.tokenizer,
-                queryInputs, max_gen_len=max_seq_len, temperature=temperature, top_p=top_p
+                queryInputs,
+                max_gen_len = max_seq_len,
+                temperature=temperature,
+                top_p = top_p,
+                use_repetition_penalty = use_repetition_penalty,
+                repetition_penalty_range = repetition_penalty_range,
+                repetition_penalty_slope = repetition_penalty_slope,
+                repetition_penalty = repetition_penalty
             )
             tokenx = []
             while None != (next_token := generator.get_next_token()):

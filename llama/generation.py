@@ -1,10 +1,10 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # This software may be used and distributed according to the terms of the GNU General Public License version 3.
 
-from typing import List
-
 import torch
 
+import traceback
+from typing import List
 from llama.model import Transformer
 from llama.tokenizer import Tokenizer
 import os
@@ -21,7 +21,7 @@ class Llama:
         local_rank = int(os.environ.get("LOCAL_RANK", -1))
         world_size = int(os.environ.get("WORLD_SIZE", -1))
 
-        torch.distributed.init_process_group("nccl")
+        torch.distributed.init_process_group("gloo")
         initialize_model_parallel(world_size)
         torch.cuda.set_device(local_rank)
 
@@ -47,7 +47,7 @@ class Llama:
         )
         tokenizer = Tokenizer(model_path=tokenizer_path)
         model_args.vocab_size = tokenizer.n_words
-        torch.set_default_tensor_type(torch.cuda.HalfTensor)
+        torch.set_default_tensor_type(torch.HalfTensor)
         model = Transformer(model_args)
         torch.set_default_tensor_type(torch.FloatTensor)
         model.load_state_dict(checkpoint, strict=False)
@@ -78,12 +78,13 @@ class Llama:
 
         total_len = min(params.max_seq_len, max_gen_len + max_prompt_size)
 
-        tokens = torch.full((bsz, total_len), self.tokenizer.pad_id).cuda().long()
+        tokens = torch.full((bsz, total_len), self.tokenizer.pad_id).long().to("mps")
         for k, t in enumerate(prompt_tokens):
-            tokens[k, : len(t)] = torch.tensor(t).long()
+            tokens[k, : len(t)] = torch.tensor(t).long().to("mps")
         input_text_mask = tokens != self.tokenizer.pad_id
         start_pos = min_prompt_size
         prev_pos = 0
+        decoded = [None] * bsz
         for cur_pos in range(start_pos, total_len):
             logits = self.model.forward(tokens[:, prev_pos:cur_pos], prev_pos)
             if temperature > 0:
@@ -99,16 +100,20 @@ class Llama:
             tokens[:, cur_pos] = next_token
             prev_pos = cur_pos
 
-        decoded = []
-        for i, t in enumerate(tokens.tolist()):
-            # cut to max gen len
-            t = t[: len(prompt_tokens[i]) + max_gen_len]
-            # cut to eos tok if any
-            try:
-                t = t[: t.index(self.tokenizer.eos_id)]
-            except ValueError:
-                pass
             decoded.append(self.tokenizer.decode(t))
+            for i, t in enumerate(tokens.tolist()):
+                t = t[: min(cur_pos, len(prompt_tokens[i]) + max_gen_len)]
+                try:
+                    t = t[: t.index(self.tokenizer.eos_id)]
+                except ValueError:
+                    pass  # traceback.print_exc()
+                try:
+                    d = self.tokenizer.decode(t)
+                    print(d[len(decoded[i - 1]) :], end = "")
+                    decoded[i] = d
+                except IndexError:
+                    traceback.print_exc()
+                    print(t)
         return decoded
 
 

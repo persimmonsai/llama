@@ -1,62 +1,60 @@
-# LLaMA 
+# LLaMA_MPS
+Run LLaMA inference on Apple Silicon GPUs.
 
-This repository is intended as a minimal, hackable and readable example to load [LLaMA](https://ai.facebook.com/blog/large-language-model-llama-meta-ai/) ([arXiv](https://arxiv.org/abs/2302.13971v1)) models and run inference.
-In order to download the checkpoints and tokenizer, fill this [google form](https://forms.gle/jk851eBVbX1m5TAv5)
+![Demo](demo.gif)
 
-## Setup
+### Setup
 
-In a conda env with pytorch / cuda available, run:
-```
-pip install -r requirements.txt
-```
-Then in this repository:
-```
-pip install -e .
-```
+**1. Clone this repo**
 
-## Download
+`git clone https://github.com/jankais3r/LLaMA_MPS`
 
-Once your request is approved, you will receive links to download the tokenizer and model files.
-Edit the `download.sh` script with the signed url provided in the email to download the model weights and tokenizer.
+**2. [Download the model weights](https://github.com/facebookresearch/llama/pull/73/files#diff-b335630551682c19a781afebcf4d07bf978fb1f8ac04c6bf87428ed5106870f5R4) and put them into a folder called** `models` (e.g., `LLaMA_MPS/models/7B`)
 
-## Inference
+**3. Install Python dependencies**
 
-The provided `example.py` can be run on a single or multi-gpu node with `torchrun` and will output completions for two pre-defined prompts. Using `TARGET_FOLDER` as defined in `download.sh`:
-```
-torchrun --nproc_per_node MP example.py --ckpt_dir $TARGET_FOLDER/model_size --tokenizer_path $TARGET_FOLDER/tokenizer.model
+```bash
+pip3 install -r requirements.txt
+pip3 install -e .
 ```
 
-Different models require different MP values:
+**4. _(Optional)_ Reshard the model (13B/30B/65B)**
 
-|  Model | MP |
-|--------|----|
-| 7B     | 1  |
-| 13B    | 2  |
-| 33B    | 4  |
-| 65B    | 8  |
+Since we are running the inference on a single GPU, we need to merge the larger models' weights into a single file.
 
-## FAQ
-
-- [1. The download.sh script doesn't work on default bash in MacOS X](FAQ.md#1)
-- [2. Generations are bad!](FAQ.md#2)
-- [3. CUDA Out of memory errors](FAQ.md#3)
-- [4. Other languages](FAQ.md#4)
-
-## Reference
-
-LLaMA: Open and Efficient Foundation Language Models -- https://arxiv.org/abs/2302.13971
-
-```
-@article{touvron2023llama,
-  title={LLaMA: Open and Efficient Foundation Language Models},
-  author={Touvron, Hugo and Lavril, Thibaut and Izacard, Gautier and Martinet, Xavier and Lachaux, Marie-Anne and Lacroix, Timoth{\'e}e and Rozi{\`e}re, Baptiste and Goyal, Naman and Hambro, Eric and Azhar, Faisal and Rodriguez, Aurelien and Joulin, Armand and Grave, Edouard and Lample, Guillaume},
-  journal={arXiv preprint arXiv:2302.13971},
-  year={2023}
-}
+```bash
+mv models/13B models/13B_orig
+mkdir models/13B
+python3 reshard.py 1 models/13B_orig models/13B
 ```
 
-## Model Card
-See [MODEL_CARD.md](MODEL_CARD.md)
+**5. Run the inference**
 
-## License
-See the [LICENSE](LICENSE) file.
+`PYTORCH_ENABLE_MPS_FALLBACK=1 torchrun chat.py --ckpt_dir models/13B  --tokenizer_path models/tokenizer.model --max_batch_size=8`
+
+### Memory requirements
+
+| Model  | Peak memory during load | Memory during inference |
+| ------------- | ------------- | ------------- |
+| 7B  | 25 GB  | 16 GB  |
+| 13B  | 66 GB  | 32 GB  |
+| 30B  | ?? GB  | ?? GB  |
+| 65B  | ?? GB  | ?? GB  |
+
+### Parameters to experiment with
+**- max_batch_size**
+
+If you are running low on memory, you can reduce `max_batch_size` to 1.
+
+**- max_gen_len**
+
+To increase/reduce the length of the generated text, edit the `max_gen_len` value in [chat.py](https://github.com/jankais3r/LLaMA_MPS/blob/main/chat.py#L83).
+
+
+### Credits
+
+- facebookresearch ([original code](https://github.com/facebookresearch/llama))
+- markasoftware ([cpu optimizations](https://github.com/markasoftware/llama-cpu))
+- remixer-dec ([mps optimizations](https://github.com/remixer-dec/llama-mps))
+- venuatu ([continuous token printing](https://github.com/venuatu/llama/commit/25c84973f71877677547453dab77eeaea9a86376))
+- benob ([reshard script](https://gist.github.com/benob/4850a0210b01672175942203aa36d300))

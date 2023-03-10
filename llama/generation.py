@@ -18,30 +18,17 @@ class Llama:
         max_seq_len: int,
         max_batch_size: int,
     ) -> "Llama":
-        local_rank = int(os.environ.get("LOCAL_RANK", -1))
-        world_size = int(os.environ.get("WORLD_SIZE", -1))
-
-        torch.distributed.init_process_group("gloo")
-        initialize_model_parallel(world_size)
-        torch.cuda.set_device(local_rank)
-
-        # seed must be the same in all processes
-        torch.manual_seed(1)
-
-        if local_rank > 0:
-            sys.stdout = open(os.devnull, "w")
-
         start_time = time.time()
         checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
-        assert world_size == len(
-            checkpoints
-        ), f"Loading a checkpoint for MP={len(checkpoints)} but world size is {world_size}"
-        ckpt_path = checkpoints[local_rank]
+        ckpt_path = checkpoints[0]
         print("Loading")
         checkpoint = torch.load(ckpt_path, map_location="cpu")
         with open(Path(ckpt_dir) / "params.json", "r") as f:
             params = json.loads(f.read())
 
+        random_seed = random.randint(1, 65534)
+        torch.manual_seed(random_seed)
+        print(f"Seed: {random_seed:5d}")
         model_args: ModelArgs = ModelArgs(
             max_seq_len=max_seq_len, max_batch_size=max_batch_size, **params
         )
@@ -51,6 +38,7 @@ class Llama:
         model = Transformer(model_args)
         torch.set_default_tensor_type(torch.FloatTensor)
         model.load_state_dict(checkpoint, strict=False)
+        model = model.to("mps")
 
         generator = Llama(model, tokenizer)
         print(f"Loaded in {time.time() - start_time:.2f} seconds")
@@ -106,11 +94,13 @@ class Llama:
                 try:
                     t = t[: t.index(self.tokenizer.eos_id)]
                 except ValueError:
-                    pass  # traceback.print_exc()
+                    pass
                 try:
                     d = self.tokenizer.decode(t)
-                    print(d[len(decoded[i - 1]) :], end = "")
+                    print(d[len(decoded[i - 1]) :], end="", flush=True)
                     decoded[i] = d
+                    if d.endswith('\n\n'):
+                        return decoded
                 except IndexError:
                     traceback.print_exc()
                     print(t)

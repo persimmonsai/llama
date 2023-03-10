@@ -230,11 +230,15 @@ class Transformer(nn.Module):
 
         mask = None
         if seqlen > 1:
-            mask = torch.full((1, 1, seqlen, seqlen), float("-inf"), device=torch.device("cpu"))
+            mask = torch.full(
+                (1, 1, seqlen, seqlen), float("-inf"), device=torch.device("cpu")
+            )
             mask = torch.triu(mask, diagonal=start_pos + 1).type_as(h)
 
         for layer in self.layers:
-            h = layer(h, start_pos, freqs_cis, (mask.to("mps") if mask is not None else mask))
+            h = layer(
+                h, start_pos, freqs_cis, (mask.to("mps") if mask is not None else mask)
+            )
         h = self.norm(h)
         output = self.output(h[:, -1, :])  # only compute last logits
         return output.float()

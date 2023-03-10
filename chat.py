@@ -14,13 +14,14 @@ import resource
 resource.setrlimit(resource.RLIMIT_NOFILE, (10000, 10000))
 
 import sys
-import torch
 import fire
 import time
 import json
 import warnings
 from typing import Tuple
+import torch
 import random
+import pyarrow as pa
 from pathlib import Path
 from llama import ModelArgs, Transformer, Tokenizer, Llama
 
@@ -30,18 +31,51 @@ def load(
     tokenizer_path: str,
     max_seq_len: int,
     max_batch_size: int,
-) -> LLama:
-    start_time = time.time()
-    checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
-    ckpt_path = checkpoints[0]
-    print("Loading")
-    checkpoint = torch.load(ckpt_path, map_location="cpu")
+) -> Llama:
+    arrow_dir = Path(ckpt_dir).expanduser() / "arrow"
+    if not arrow_dir.exists():
+        checkpoints = sorted(Path(ckpt_dir).expanduser().glob("*.pth"))
+        if len(checkpoints) > 1:
+            print(
+                "The selected model is split into several checkpoints and needs to be merged first.\nUse the 'reshard.py' script."
+            )
+            sys.exit()
+        print("Converting checkpoint to pyarrow format")
+        for ckpt_file in checkpoints:
+            print(ckpt_file)
+            index = ckpt_file.parts[-1].split(".")[-2]
+
+            ckpt = torch.load(ckpt_file, map_location="cpu")
+            (arrow_dir / index).mkdir(parents=True, exist_ok=True)
+            for k, v in ckpt.items():
+                tens = pa.Tensor.from_numpy(v.numpy())
+                with pa.output_stream(arrow_dir / index / k) as f:
+                    pa.ipc.write_tensor(tens, f)
+            ckpt = None
+        print(
+            "Checkpoint converted - feel free to delete the original '.pth' file (while keeping the 'arrow' folder)"
+        )
+
     with open(Path(ckpt_dir) / "params.json", "r") as f:
         params = json.loads(f.read())
 
     random_seed = random.randint(1, 65534)
     torch.manual_seed(random_seed)
     print(f"Seed: {random_seed:5d}")
+    start_time = time.time()
+    print("Loading checkpoint")
+    segments = sorted((arrow_dir / "00").glob("*"))
+
+    checkpoint = {}
+    files = []
+    for seg in segments:
+        f = pa.memory_map(str(seg))
+        files.append(f)
+        t = pa.ipc.read_tensor(f).to_numpy()
+        t = torch.from_numpy(t)
+        checkpoint[seg.parts[-1]] = t
+        f.close()
+
     model_args: ModelArgs = ModelArgs(
         max_seq_len=max_seq_len, max_batch_size=max_batch_size, **params
     )

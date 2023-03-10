@@ -8,6 +8,8 @@ import time
 from pathlib import Path
 from typing import List, Literal, Optional, Tuple, TypedDict
 
+import pyarrow as pa
+
 import torch
 import torch.nn.functional as F
 from fairscale.nn.model_parallel.initialize import (
@@ -84,8 +86,44 @@ class Llama:
         assert model_parallel_size == len(
             checkpoints
         ), f"Loading a checkpoint for MP={len(checkpoints)} but world size is {model_parallel_size}"
-        ckpt_path = checkpoints[get_model_parallel_rank()]
-        checkpoint = torch.load(ckpt_path, map_location="cpu")
+        arrow_dir = Path(ckpt_dir).expanduser() / "arrow"
+        if not arrow_dir.exists():
+            checkpoints = sorted(Path(ckpt_dir).expanduser().glob("*.pth"))
+            if len(checkpoints) > 1:
+                print(
+                    "The selected model is split into several checkpoints and needs to be merged first.\nUse the 'reshard.py' script."
+                )
+                sys.exit()
+            print("Converting checkpoint to pyarrow format")
+            for ckpt_file in checkpoints:
+                print(ckpt_file)
+                index = ckpt_file.parts[-1].split(".")[-2]
+
+                ckpt = torch.load(ckpt_file, map_location="cpu")
+                (arrow_dir / index).mkdir(parents=True, exist_ok=True)
+                for k, v in ckpt.items():
+                    tens = pa.Tensor.from_numpy(v.numpy())
+                    with pa.output_stream(arrow_dir / index / k) as f:
+                        pa.ipc.write_tensor(tens, f)
+                ckpt = None
+            print(
+                "Checkpoint converted - feel free to delete the original '.pth' file (while keeping the 'arrow' folder)"
+            )
+
+        start_time = time.time()
+        print("Loading checkpoint")
+        segments = sorted((arrow_dir / "00").glob("*"))
+
+        checkpoint = {}
+        files = []
+        for seg in segments:
+            f = pa.memory_map(str(seg))
+            files.append(f)
+            t = pa.ipc.read_tensor(f).to_numpy()
+            t = torch.from_numpy(t)
+            checkpoint[seg.parts[-1]] = t
+            f.close()
+
         with open(Path(ckpt_dir) / "params.json", "r") as f:
             params = json.loads(f.read())
 

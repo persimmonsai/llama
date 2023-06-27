@@ -9,6 +9,15 @@ from dataclasses import dataclass
 from typing import Optional, Tuple
 from torch.nn.utils import skip_init
 
+if torch.cuda.is_available():
+    device0 = torch.device("cuda")
+    device1 = torch.device("cuda")
+else:
+    device0 = torch.device("cpu")
+    if torch.backends.mps.is_available():
+        device1 = torch.device("mps")
+    else:
+        device1 = torch.device("cpu")
 
 @dataclass
 class ModelArgs:
@@ -57,14 +66,14 @@ def apply_rotary_emb(
     xk: torch.Tensor,
     freqs_cis: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    xq = xq.to("cpu")
-    xk = xk.to("cpu")
+    xq = xq.to(device0)
+    xk = xk.to(device0)
     xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
     xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
     freqs_cis = reshape_for_broadcast(freqs_cis, xq_)
     xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
     xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
-    return xq_out.type_as(xq).to("mps"), xk_out.type_as(xk).to("mps")
+    return xq_out.type_as(xq).to(device1), xk_out.type_as(xk).to(device1)
 
 
 class Attention(nn.Module):
@@ -102,10 +111,10 @@ class Attention(nn.Module):
 
         self.cache_k = torch.zeros(
             (args.max_batch_size, args.max_seq_len, self.n_local_heads, self.head_dim)
-        ).to("mps")
+        ).to(device1)
         self.cache_v = torch.zeros(
             (args.max_batch_size, args.max_seq_len, self.n_local_heads, self.head_dim)
-        ).to("mps")
+        ).to(device1)
 
         self.scale = self.head_dim**-.5
 
@@ -268,13 +277,13 @@ class Transformer(nn.Module):
         mask = None
         if seqlen > 1:
             mask = torch.full(
-                (1, 1, seqlen, seqlen), float("-inf"), device=torch.device("cpu")
+                (1, 1, seqlen, seqlen), float("-inf"), device=torch.device(device0)
             )
             mask = torch.triu(mask, diagonal=start_pos + 1).type_as(h)
 
         for layer in self.layers:
             h = layer(
-                h, start_pos, freqs_cis, (mask.to("mps") if mask is not None else mask)
+                h, start_pos, freqs_cis, (mask.to(device1) if mask is not None else mask)
             )
         h = self.norm(h)
         output = self.output(h[:, -1, :])

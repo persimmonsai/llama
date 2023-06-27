@@ -24,10 +24,13 @@ class Llama:
     ) -> "Llama":
         local_rank = int(os.environ.get("LOCAL_RANK", -1))
         world_size = int(os.environ.get("WORLD_SIZE", -1))
-
-        torch.distributed.init_process_group("gloo")
+        if torch.cuda.is_available():
+            torch.distributed.init_process_group("nccl")
+        else:
+            torch.distributed.init_process_group("gloo")
         initialize_model_parallel(world_size)
-#        torch.cuda.set_device(local_rank)
+        if torch.cuda.is_available():
+            torch.cuda.set_device(local_rank)
 
         # seed must be the same in all processes
         torch.manual_seed(1)
@@ -51,11 +54,17 @@ class Llama:
         )
         tokenizer = Tokenizer(model_path=tokenizer_path)
         model_args.vocab_size = tokenizer.n_words
-        torch.set_default_tensor_type(torch.HalfTensor)
+        if torch.backends.mps.is_available():
+            torch.set_default_dtype(torch.float16)
+        elif torch.cuda.is_available():
+            torch.set_default_dtype(torch.float16)
+        else:
+            torch.set_default_dtype(torch.bfloat16)
         model = Transformer(model_args)
         torch.set_default_tensor_type(torch.FloatTensor)
         model.load_state_dict(checkpoint, strict=False)
-        model = model.to("mps")
+        if torch.backends.mps.is_available():
+            model = model.to("mps")
 
         generator = Llama(model, tokenizer)
         print(f"Loaded in {time.time() - start_time:.2f} seconds")
@@ -83,9 +92,9 @@ class Llama:
 
         total_len = min(params.max_seq_len, max_gen_len + max_prompt_size)
 
-        tokens = torch.full((bsz, total_len), self.tokenizer.pad_id).long().to("mps")
+        tokens = torch.full((bsz, total_len), self.tokenizer.pad_id).long()
         for k, t in enumerate(prompt_tokens):
-            tokens[k, : len(t)] = torch.tensor(t).long().to("mps")
+            tokens[k, : len(t)] = torch.tensor(t).long()
         input_text_mask = tokens != self.tokenizer.pad_id
         start_pos = min_prompt_size
         prev_pos = 0

@@ -9,6 +9,12 @@ import time
 import json
 import warnings
 from typing import Tuple
+
+if torch.cuda.is_available():
+    torch.set_default_device('cuda')
+elif torch.backends.mps.is_available():
+    torch.set_default_device('mps')
+
 from pathlib import Path
 warnings.filterwarnings("ignore")
 from llama import ModelArgs, Transformer, Tokenizer, LLaMA
@@ -49,11 +55,16 @@ def load(
     )
     tokenizer = Tokenizer(model_path = tokenizer_path)
     model_args.vocab_size = tokenizer.n_words
-    torch.set_default_tensor_type(torch.HalfTensor)
+    if torch.backends.mps.is_available():
+        torch.set_default_tensor_type(torch.HalfTensor)
+    else:
+        torch.set_default_tensor_type(torch.BFloat16Tensor)
     model = Transformer(model_args)
     torch.set_default_tensor_type(torch.FloatTensor)
     model.load_state_dict(checkpoint, strict=False)
-    model = model.to("mps")
+    if torch.backends.mps.is_available():
+        model = model.to("mps")
+
     generator = LLaMA(model, tokenizer)
     print(f"Loaded in {time.time() - start_time:.2f} seconds")
     return generator

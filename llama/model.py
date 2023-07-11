@@ -11,15 +11,11 @@ import torch.nn.functional as F
 from torch import nn
 from torch.nn.utils import skip_init
 
-if torch.cuda.is_available():
-    device0 = torch.device("cuda")
-    device1 = torch.device("cuda")
-else:
+device1 = torch.empty((0)).device
+if torch.backends.mps.is_available():
     device0 = torch.device("cpu")
-    if torch.backends.mps.is_available():
-        device1 = torch.device("mps")
-    else:
-        device1 = torch.device("cpu")
+else:
+    device0 = device1
 
 @dataclass
 class ModelArgs:
@@ -49,7 +45,7 @@ class RMSNorm(torch.nn.Module):
 
 
 def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
-    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
+    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2, device=device0)[: (dim // 2)].float() / dim))
     t = torch.arange(end, device=freqs.device)  # type: ignore
     freqs = torch.outer(t, freqs).float()  # type: ignore
     freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64
@@ -69,8 +65,8 @@ def apply_rotary_emb(
     xk: torch.Tensor,
     freqs_cis: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    xq = xq.to(device0)
-    xk = xk.to(device0)
+    xq = xq.to(freqs_cis.device)
+    xk = xk.to(freqs_cis.device)
     xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
     xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
     freqs_cis = reshape_for_broadcast(freqs_cis, xq_)
@@ -262,7 +258,7 @@ class Transformer(nn.Module):
         mask = None
         if seqlen > 1:
             mask = torch.full(
-                (1, 1, seqlen, seqlen), float("-inf"), device=torch.device(device0)
+                (1, 1, seqlen, seqlen), float("-inf"), device=torch.device(freqs_cis.device)
             )
             mask = torch.triu(mask, diagonal=start_pos + 1).type_as(h)
 

@@ -34,11 +34,15 @@ class Llama:
         )
         tokenizer = Tokenizer(model_path=tokenizer_path)
         model_args.vocab_size = tokenizer.n_words
-        torch.set_default_tensor_type(torch.HalfTensor)
+        if torch.backends.mps.is_available():
+            torch.set_default_tensor_type(torch.HalfTensor)
+        else:
+            torch.set_default_tensor_type(torch.BFloat16Tensor)
         model = Transformer(model_args)
         torch.set_default_tensor_type(torch.FloatTensor)
         model.load_state_dict(checkpoint, strict=False)
-        model = model.to("mps")
+        if torch.backends.mps.is_available():
+            model = model.to("mps")
 
         generator = Llama(model, tokenizer)
         print(f"Loaded in {time.time() - start_time:.2f} seconds")
@@ -66,9 +70,9 @@ class Llama:
 
         total_len = min(params.max_seq_len, max_gen_len + max_prompt_size)
 
-        tokens = torch.full((bsz, total_len), self.tokenizer.pad_id).long().to("mps")
+        tokens = torch.full((bsz, total_len), self.tokenizer.pad_id).long()
         for k, t in enumerate(prompt_tokens):
-            tokens[k, : len(t)] = torch.tensor(t).long().to("mps")
+            tokens[k, : len(t)] = torch.tensor(t).long()
         input_text_mask = tokens != self.tokenizer.pad_id
         start_pos = min_prompt_size
         prev_pos = 0

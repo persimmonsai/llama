@@ -110,13 +110,29 @@ class Attention(nn.Module):
         )
 
         self.cache_k = torch.zeros(
-            (args.max_batch_size, args.max_seq_len, self.n_local_heads, self.head_dim)
+            (
+                args.max_batch_size,
+                args.max_seq_len,
+                self.n_local_heads,
+                self.head_dim,
+            )
         ).cuda()
         self.cache_v = torch.zeros(
-            (args.max_batch_size, args.max_seq_len, self.n_local_heads, self.head_dim)
+            (
+                args.max_batch_size,
+                args.max_seq_len,
+                self.n_local_heads,
+                self.head_dim,
+            )
         ).cuda()
 
-    def forward(self, x: torch.Tensor, start_pos: int, freqs_cis: torch.Tensor, mask: Optional[torch.Tensor]):
+    def forward(
+        self,
+        x: torch.Tensor,
+        start_pos: int,
+        freqs_cis: torch.Tensor,
+        mask: Optional[torch.Tensor],
+    ):
         bsz, seqlen, _ = x.shape
         xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
 
@@ -183,14 +199,24 @@ class TransformerBlock(nn.Module):
         self.head_dim = args.dim // args.n_heads
         self.attention = Attention(args)
         self.feed_forward = FeedForward(
-            dim=args.dim, hidden_dim=4 * args.dim, multiple_of=args.multiple_of
+            dim=args.dim,
+            hidden_dim=4 * args.dim,
+            multiple_of=args.multiple_of,
         )
         self.layer_id = layer_id
         self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps)
         self.ffn_norm = RMSNorm(args.dim, eps=args.norm_eps)
 
-    def forward(self, x: torch.Tensor, start_pos: int, freqs_cis: torch.Tensor, mask: Optional[torch.Tensor]):
-        h = x + self.attention.forward(self.attention_norm(x), start_pos, freqs_cis, mask)
+    def forward(
+        self,
+        x: torch.Tensor,
+        start_pos: int,
+        freqs_cis: torch.Tensor,
+        mask: Optional[torch.Tensor],
+    ):
+        h = x + self.attention.forward(
+            self.attention_norm(x), start_pos, freqs_cis, mask
+        )
         out = h + self.feed_forward.forward(self.ffn_norm(h))
         return out
 
@@ -228,7 +254,9 @@ class Transformer(nn.Module):
 
         mask = None
         if seqlen > 1:
-            mask = torch.full((1, 1, seqlen, seqlen), float("-inf"), device=tokens.device)
+            mask = torch.full(
+                (1, 1, seqlen, seqlen), float("-inf"), device=tokens.device
+            )
             mask = torch.triu(mask, diagonal=start_pos + 1).type_as(h)
 
         for layer in self.layers:

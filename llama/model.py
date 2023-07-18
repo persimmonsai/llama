@@ -110,13 +110,29 @@ class Attention(nn.Module):
         )
 
         self.cache_k = torch.zeros(
-            (args.max_batch_size, args.max_seq_len, self.n_local_heads, self.head_dim)
+            (
+                args.max_batch_size,
+                args.max_seq_len,
+                self.n_local_heads,
+                self.head_dim,
+            )
         ).cuda()
         self.cache_v = torch.zeros(
-            (args.max_batch_size, args.max_seq_len, self.n_local_heads, self.head_dim)
+            (
+                args.max_batch_size,
+                args.max_seq_len,
+                self.n_local_heads,
+                self.head_dim,
+            )
         ).cuda()
 
-    def forward(self, x: torch.Tensor, start_pos: int, freqs_cis: torch.Tensor, mask: Optional[torch.Tensor]):
+    def forward(
+        self,
+        x: torch.Tensor,
+        start_pos: int,
+        freqs_cis: torch.Tensor,
+        mask: Optional[torch.Tensor],
+    ):
         bsz, seqlen, _ = x.shape
         xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
 
@@ -228,7 +244,9 @@ class Transformer(nn.Module):
 
         mask = None
         if seqlen > 1:
-            mask = torch.full((1, 1, seqlen, seqlen), float("-inf"), device=tokens.device)
+            mask = torch.full(
+                (1, 1, seqlen, seqlen), float("-inf"), device=tokens.device
+            )
             mask = torch.triu(mask, diagonal=start_pos + 1).type_as(h)
 
         for layer in self.layers:

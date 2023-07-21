@@ -5,7 +5,11 @@ import math
 from dataclasses import dataclass
 from typing import Any, Optional, Tuple
 
-import fairscale.nn.model_parallel.initialize as fs_init
+try:
+    import fairscale.nn.model_parallel.initialize as fs_init
+except ImportError:
+    pass
+
 import torch
 import torch.nn.functional as F
 from torch import nn

@@ -80,10 +80,10 @@ class Llama:
         for cur_pos in range(start_pos, total_len):
             logits = self.model.forward(tokens[:, prev_pos:cur_pos], prev_pos)
             if temperature > 0:
-                probs = torch.softmax(logits / temperature, dim=-1)
+                probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
                 next_token = sample_top_p(probs, top_p)
             else:
-                next_token = torch.argmax(logits, dim=-1)
+                next_token = torch.argmax(logits[:, -1], dim=-1)
             next_token = next_token.reshape(-1)
             # only replace token if prompt has already been generated
             next_token = torch.where(

@@ -298,5 +298,5 @@ class Transformer(nn.Module):
         for layer in self.layers:
             h = layer(h, start_pos, freqs_cis, (mask.to(device1) if mask is not None else mask))
         h = self.norm(h)
-        output = self.output(h[:, -1, :])  # only compute last logits
-        return output.float()
+        output = self.output(h).float()
+        return output

@@ -10,14 +10,14 @@ from llama.tokenizer import Tokenizer
 import os
 
 
-class LLaMA:
+class Llama:
     @staticmethod
     def build(
         ckpt_dir: str,
         tokenizer_path: str,
         max_seq_len: int,
         max_batch_size: int,
-    ) -> "LLaMA":
+    ) -> "Llama":
         local_rank = int(os.environ.get("LOCAL_RANK", -1))
         world_size = int(os.environ.get("WORLD_SIZE", -1))
 
@@ -52,7 +52,7 @@ class LLaMA:
         torch.set_default_tensor_type(torch.FloatTensor)
         model.load_state_dict(checkpoint, strict=False)
 
-        generator = LLaMA(model, tokenizer)
+        generator = Llama(model, tokenizer)
         print(f"Loaded in {time.time() - start_time:.2f} seconds")
         return generator
 

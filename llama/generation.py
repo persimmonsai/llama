@@ -76,7 +76,7 @@ class Llama:
 
     def generate(
         self,
-        prompts: List[str],
+        prompt_tokens: List[List[int]],
         max_gen_len: int,
         temperature: float = 0.8,
         top_p: float = 0.95,
@@ -84,8 +84,6 @@ class Llama:
         bsz = len(prompts)
         params = self.model.params
         assert bsz <= params.max_batch_size, (bsz, params.max_batch_size)
-
-        prompt_tokens = [self.tokenizer.encode(x, bos=True, eos=False) for x in prompts]
 
         min_prompt_size = min([len(t) for t in prompt_tokens])
         max_prompt_size = max([len(t) for t in prompt_tokens])
@@ -113,17 +111,7 @@ class Llama:
             tokens[:, cur_pos] = next_token
             prev_pos = cur_pos
 
-        decoded = []
-        for i, t in enumerate(tokens.tolist()):
-            # cut to max gen len
-            t = t[: len(prompt_tokens[i]) + max_gen_len]
-            # cut to eos tok if any
-            try:
-                t = t[: t.index(self.tokenizer.eos_id)]
-            except ValueError:
-                pass
-            decoded.append(self.tokenizer.decode(t))
-        return decoded
+        return tokens
 
 
 def sample_top_p(probs, p):

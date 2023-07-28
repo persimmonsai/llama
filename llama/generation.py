@@ -13,6 +13,62 @@ from llama.tokenizer import Tokenizer
 from llama.model import ModelArgs, Transformer
 import os
 
+class Generator:
+    def __init__(
+        self,
+        model,
+        tokenizer,
+        prompt_tokens: List[List[int]],
+        max_gen_len: int,
+        temperature: float = 0.8,
+        top_p: float = 0.95,
+    ):
+        self.max_gen_len = max_gen_len
+        self.temperature = temperature
+        self.top_p = top_p
+        self.model = model
+        self.tokenizer = tokenizer
+        self.bsz = len(prompt_tokens)
+        params = self.model.params
+        assert self.bsz <= params.max_batch_size, (self.bsz, params.max_batch_size)
+
+        self.min_prompt_size = min(len(t) for t in prompt_tokens)
+        self.max_prompt_size = max(len(t) for t in prompt_tokens)
+
+        self.total_len = min(params.max_seq_len, self.max_gen_len + self.max_prompt_size)
+
+        self.pad_id = self.tokenizer.pad_id
+        self.tokens = torch.full((self.bsz, self.total_len), self.pad_id, dtype=torch.long)
+        for k, t in enumerate(prompt_tokens):
+            self.tokens[k, : len(t)] = torch.tensor(t).long()
+
+        self.prev_pos = 0
+        self.cur_pos = self.min_prompt_size
+
+    def get_next_token(self):
+        input_text_mask = self.tokens != self.tokenizer.pad_id
+        if self.cur_pos >= self.total_len: return None
+
+        logits = self.model.forward(self.tokens[:, self.prev_pos:self.cur_pos], self.prev_pos)
+        if self.temperature > 0:
+            probs = torch.softmax(logits[:, -1] / self.temperature, dim=-1)
+            next_token = sample_top_p(probs, self.top_p)
+        else:
+            next_token = torch.argmax(logits[:, -1], dim=-1)
+
+        next_token = next_token.reshape(-1)
+        # only replace token if prompt has already been generated
+        next_token = torch.where(
+            input_text_mask[:, self.cur_pos], self.tokens[:, self.cur_pos], next_token
+        )
+        self.tokens[:, self.cur_pos] = next_token
+        self.prev_pos = self.cur_pos
+        self.cur_pos += 1
+
+        return next_token
+
+
+
 
 class Llama:
     @staticmethod

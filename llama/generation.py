@@ -47,6 +47,82 @@ B_SYS, E_SYS = "<<SYS>>\n", "\n<</SYS>>\n\n"
 SPECIAL_TAGS = [B_INST, E_INST, "<<SYS>>", "<</SYS>>"]
 UNSAFE_ERROR = "Error: special tags are not allowed as part of the prompt."
 
+class Generator:
+    def __init__(
+        self,
+        model,
+        tokenizer,
+        prompt_tokens: List[List[int]],
+        max_gen_len: int,
+        temperature: float = 0.6,
+        top_p: float = 0.9,
+        logprobs: bool = False,
+        echo: bool = False,
+    ):
+        self.max_gen_len = max_gen_len
+        self.temperature = temperature
+        self.top_p = top_p
+        self.logprobs = logprobs
+        self.echo = echo
+        self.model = model
+        self.tokenizer = tokenizer
+        self.bsz = len(prompt_tokens)
+        params = self.model.params
+        assert self.bsz <= params.max_batch_size, (self.bsz, params.max_batch_size)
+
+        self.min_prompt_len = min(len(t) for t in prompt_tokens)
+        self.max_prompt_len = max(len(t) for t in prompt_tokens)
+        assert self.max_prompt_len <= params.max_seq_len
+        self.total_len = min(params.max_seq_len, self.max_gen_len + self.max_prompt_len)
+
+        self.pad_id = self.tokenizer.pad_id
+        self.tokens = torch.full((self.bsz, self.total_len), self.pad_id, dtype=torch.long)
+        for k, t in enumerate(prompt_tokens):
+            self.tokens[k, : len(t)] = torch.tensor(t, dtype=torch.long)
+        if logprobs:
+            self.token_logprobs = torch.zeros_like(tokens, dtype=torch.float)
+
+        self.prev_pos = 0
+        self.cur_pos = self.min_prompt_len
+        self.eos_reached = torch.tensor([False] * self.bsz)
+
+    def get_next_token(self):
+        input_text_mask = self.tokens != self.pad_id
+        if self.cur_pos >= self.total_len: return None
+
+        logits = self.model.forward(self.tokens[:, self.prev_pos:self.cur_pos], self.prev_pos)
+        if self.logprobs:
+            self.token_logprobs[:, self.prev_pos + 1 : self.cur_pos + 1] = -F.cross_entropy(
+                input=logits.transpose(1, 2),
+                target=self.tokens[:, self.prev_pos + 1 : self.cur_pos + 1],
+                reduction="none",
+                ignore_index=self.pad_id,
+            )
+        if self.temperature > 0:
+            probs = torch.softmax(logits[:, -1] / self.temperature, dim=-1)
+            next_token = sample_top_p(probs, self.top_p)
+        else:
+            next_token = torch.argmax(logits[:, -1], dim=-1)
+
+        next_token = next_token.reshape(-1)
+        if next_token[0] == self.tokenizer.eos_id: return None
+        # only replace token if prompt has already been generated
+        next_token = torch.where(
+            input_text_mask[:, self.cur_pos], self.tokens[:, self.cur_pos], next_token
+        )
+        self.tokens[:, self.cur_pos] = next_token
+        self.eos_reached |= (~input_text_mask[:, self.cur_pos]) & (
+            next_token == self.tokenizer.eos_id
+        )
+        self.prev_pos = self.cur_pos
+        self.cur_pos += 1
+        if all(self.eos_reached):
+                return None
+
+        return next_token
+
+
+
 
 class Llama:
     @staticmethod
@@ -290,7 +366,7 @@ class Llama:
                 }
                 for t, logprobs_i in zip(generation_tokens, generation_logprobs)
             ]
-        return [{"generation": self.tokenizer.decode(t)} for t in generation_tokens]
+        return [{"raw": t, "generation": self.tokenizer.decode(t)} for t in generation_tokens]
 
     def chat_completion(
         self,

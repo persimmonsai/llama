@@ -38,4 +38,5 @@ class Tokenizer:
         return t
 
     def decode(self, t: List[int]) -> str:
-        return self.sp_model.decode(list(filter(lambda tk: tk != -1, t)))
+        return ''.join([s.replace('▁', ' ').replace('<0x0A>', '\n') for s in self.sp_model.id_to_piece(list(filter(lambda tk: tk != -1, t)))])
+#        return self.sp_model.decode(list(filter(lambda tk: tk != -1, t)))

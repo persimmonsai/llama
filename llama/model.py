@@ -27,15 +27,15 @@ elif torch.backends.mps.is_available():
     device = torch.device("mps")
     torch.set_default_device(device)
 
-def fairscale_row_parallel_linear(d1, d2): return RowParallelLinear(d1, d2, bias=False, input_is_parallel=True, init_method=lambda x: x)
+def fairscale_row_parallel_linear(d1, d2, layer_id): return RowParallelLinear(d1, d2, bias=False, input_is_parallel=True, init_method=lambda x: x)
 
-def fairscale_column_parallel_linear(d1, d2): return ColumnParallelLinear(d1, d2, bias=False, gather_output=False, init_method=lambda x: x)
+def fairscale_column_parallel_linear(d1, d2, layer_id): return ColumnParallelLinear(d1, d2, bias=False, gather_output=False, init_method=lambda x: x)
 
-def fairscale_parallel_embedding(d1, d2): return ParallelEmbedding(d1, d2, init_method=lambda x: x)
+def fairscale_parallel_embedding(d1, d2, layer_id): return ParallelEmbedding(d1, d2, init_method=lambda x: x)
 
-def skip_init_linear(d1, d2): return skip_init(nn.Linear, d1, d2, bias=False)
+def skip_init_linear(d1, d2, layer_id): return skip_init(nn.Linear, d1, d2, bias=False)
 
-def skip_init_embedding(d1, d2): return skip_init(nn.Embedding, d1, d2)
+def skip_init_embedding(d1, d2, layer_id): return skip_init(nn.Embedding, d1, d2)
 
 use_fairscale = True
 
@@ -133,7 +133,7 @@ def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
 
 
 class Attention(nn.Module):
-    def __init__(self, args: ModelArgs):
+    def __init__(self, args: ModelArgs, layer_id: int):
         super().__init__()
         self.n_kv_heads = args.n_heads if args.n_kv_heads is None else args.n_kv_heads
         model_parallel_size = fs_init.get_model_parallel_world_size()
@@ -145,18 +145,22 @@ class Attention(nn.Module):
         self.wq = wqParallelLinear(
             args.dim,
             args.n_heads * self.head_dim,
+            layer_id,
         )
         self.wk = wkParallelLinear(
             args.dim,
             self.n_kv_heads * self.head_dim,
+            layer_id,
         )
         self.wv = wvParallelLinear(
             args.dim,
             self.n_kv_heads * self.head_dim,
+            layer_id,
         )
         self.wo = woParallelLinear(
             args.n_heads * self.head_dim,
             args.dim,
+            layer_id,
         )
 
         self.cache_k = torch.zeros(
@@ -224,6 +228,7 @@ class FeedForward(nn.Module):
         hidden_dim: int,
         multiple_of: int,
         ffn_dim_multiplier: Optional[float],
+        layer_id: int,
     ):
         super().__init__()
         hidden_dim = int(2 * hidden_dim / 3)
@@ -233,31 +238,35 @@ class FeedForward(nn.Module):
         hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
 
         self.w1 = w1ParallelLinear(
-            dim, hidden_dim
+            dim, hidden_dim, layer_id
         )
         self.w2 = w2ParallelLinear(
-            hidden_dim, dim
+            hidden_dim, dim, layer_id
         )
         self.w3 = w3ParallelLinear(
-            dim, hidden_dim
+            dim, hidden_dim, layer_id
         )
 
     def forward(self, x):
         return self.w2(F.silu(self.w1(x)) * self.w3(x))
 
+def layer_id_map(layer_id, n_heads):
+    return layer_id
 
 class TransformerBlock(nn.Module):
     def __init__(self, layer_id: int, args: ModelArgs):
         super().__init__()
+        mapped_layer_id = layer_id_map(layer_id, args.n_heads)
         self.n_heads = args.n_heads
         self.dim = args.dim
         self.head_dim = args.dim // args.n_heads
-        self.attention = Attention(args)
+        self.attention = Attention(args, mapped_layer_id)
         self.feed_forward = FeedForward(
             dim=args.dim,
             hidden_dim=4 * args.dim,
             multiple_of=args.multiple_of,
             ffn_dim_multiplier=args.ffn_dim_multiplier,
+            layer_id=mapped_layer_id,
         )
         self.layer_id = layer_id
         self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps)
@@ -285,7 +294,7 @@ class Transformer(nn.Module):
         self.n_layers = params.n_layers
 
         self.tok_embeddings = parallelEmbedding(
-            params.vocab_size, params.dim
+            params.vocab_size, params.dim, None
         )
 
         self.layers = torch.nn.ModuleList()
@@ -294,7 +303,7 @@ class Transformer(nn.Module):
 
         self.norm = RMSNorm(params.dim, eps=params.norm_eps)
         self.output = outputParallelLinear(
-            params.dim, params.vocab_size
+            params.dim, params.vocab_size, None
         )
 
         self.freqs_cis = precompute_freqs_cis(

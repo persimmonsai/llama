@@ -33,11 +33,25 @@ def fairscale_column_parallel_linear(d1, d2, layer_id): return ColumnParallelLin
 
 def fairscale_parallel_embedding(d1, d2, layer_id): return ParallelEmbedding(d1, d2, init_method=lambda x: x)
 
-def skip_init_linear(d1, d2, layer_id): return skip_init(nn.Linear, d1, d2, bias=False)
+def test_parallel_linear1(d1, d2, layer_id): return skip_init(nn.Linear, d1, d2, bias=False)
 
-def skip_init_embedding(d1, d2, layer_id): return skip_init(nn.Embedding, d1, d2)
+def test_parallel_embedding1(d1, d2, layer_id): return skip_init(nn.Embedding, d1, d2)
 
-use_fairscale = True
+class test_parallel_linear(nn.Linear):
+    def __init__(self, d1, d2, layer_id):
+        super().__init__(d1, d2, bias=False, device='meta')
+        self.to_empty(device=device)
+    def forward(self, *args):
+        return super().forward(*args)
+
+class test_parallel_embedding(nn.Embedding):
+    def __init__(self, d1, d2, layer_id):
+        super().__init__(d1, d2, device='meta')
+        self.to_empty(device=device)
+    def forward(self, *args):
+        return super().forward(*args)
+
+use_fairscale = False
 
 if use_fairscale:
     wqParallelLinear = fairscale_column_parallel_linear
@@ -50,15 +64,15 @@ if use_fairscale:
     outputParallelLinear = fairscale_column_parallel_linear
     parallelEmbedding = fairscale_parallel_embedding
 else:
-    wqParallelLinear = skip_init_linear
-    wkParallelLinear = skip_init_linear
-    wvParallelLinear = skip_init_linear
-    woParallelLinear = skip_init_linear
-    w1ParallelLinear = skip_init_linear
-    w2ParallelLinear = skip_init_linear
-    w3ParallelLinear = skip_init_linear
-    outputParallelLinear = skip_init_linear
-    parallelEmbedding = skip_init_embedding
+    wqParallelLinear = test_parallel_linear
+    wkParallelLinear = test_parallel_linear
+    wvParallelLinear = test_parallel_linear
+    woParallelLinear = test_parallel_linear
+    w1ParallelLinear = test_parallel_linear
+    w2ParallelLinear = test_parallel_linear
+    w3ParallelLinear = test_parallel_linear
+    outputParallelLinear = test_parallel_linear
+    parallelEmbedding = test_parallel_embedding
 
 @dataclass
 class ModelArgs:

@@ -207,12 +207,13 @@ class Llama:
         model = Transformer(model_args)
 
         for layer_id in range(params['n_layers']):
-            key = f'layers.{layer_id}.attention.wq.weight'
-            wq_weight = torch.chunk(checkpoint[f'layers.{layer_id}.attention.wq.weight'], chunks=params['n_heads'], dim=0)
+            for wkey in ['wq', 'wk', 'wv']:
+                key = f'layers.{layer_id}.attention.{wkey}.weight'
+                wq_weight = torch.chunk(checkpoint[key], chunks=params['n_heads'], dim=0)
 
-            del checkpoint[key]
-            for i, weight in enumerate(wq_weight, start=0):
-                checkpoint[f'layers.{layer_id}.attention.wq.{i}.weight'] = weight
+                del checkpoint[key]
+                for i, weight in enumerate(wq_weight, start=0):
+                    checkpoint[f'layers.{layer_id}.attention.{wkey}.{i}.weight'] = weight
 
         model.load_state_dict(checkpoint, strict=False)
         if torch.backends.mps.is_available():

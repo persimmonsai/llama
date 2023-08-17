@@ -205,6 +205,15 @@ class Llama:
         else:
             torch.set_default_tensor_type(torch.BFloat16Tensor)
         model = Transformer(model_args)
+
+        for layer_id in range(params['n_layers']):
+            key = f'layers.{layer_id}.attention.wq.weight'
+            wq_weight = torch.chunk(checkpoint[f'layers.{layer_id}.attention.wq.weight'], chunks=params['n_heads'], dim=0)
+
+            del checkpoint[key]
+            for i, weight in enumerate(wq_weight, start=0):
+                checkpoint[f'layers.{layer_id}.attention.wq.{i}.weight'] = weight
+
         model.load_state_dict(checkpoint, strict=False)
         if torch.backends.mps.is_available():
             model = model.to("mps")

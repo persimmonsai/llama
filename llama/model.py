@@ -107,13 +107,13 @@ class Attention(nn.Module):
         self.n_rep = self.n_local_heads // self.n_local_kv_heads
         self.head_dim = args.dim // args.n_heads
 
-        self.wq = ColumnParallelLinear(
+        self.wq = nn.ModuleList([ColumnParallelLinear(
             args.dim,
-            args.n_heads * self.head_dim,
+            self.head_dim,
             bias=False,
             gather_output=False,
             init_method=lambda x: x,
-        )
+        ) for _ in range(args.n_heads)])
         self.wk = ColumnParallelLinear(
             args.dim,
             self.n_kv_heads * self.head_dim,
@@ -161,7 +161,8 @@ class Attention(nn.Module):
         mask: Optional[torch.Tensor],
     ):
         bsz, seqlen, _ = x.shape
-        xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
+        xq = torch.stack([wq(x) for wq in self.wq], dim=2)
+        xk, xv = self.wk(x), self.wv(x)
 
         xq = xq.view(bsz, seqlen, self.n_local_heads, self.head_dim)
         xk = xk.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)

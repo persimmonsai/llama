@@ -168,16 +168,18 @@ class Attention(nn.Module):
             'wq', layer_id,
         ) for _ in range(args.n_heads)])
 
-        self.wk = wkParallelLinear(
+        self.wk = nn.ModuleList([wkParallelLinear(
             args.dim,
-            self.n_kv_heads * self.head_dim,
+            self.head_dim,
             'wk', layer_id,
-        )
-        self.wv = wvParallelLinear(
+        ) for _ in range(self.n_kv_heads)])
+
+        self.wv = nn.ModuleList([wvParallelLinear(
             args.dim,
-            self.n_kv_heads * self.head_dim,
+            self.head_dim,
             'wv', layer_id,
-        )
+        ) for _ in range(self.n_kv_heads)])
+
         self.wo = woParallelLinear(
             args.n_heads * self.head_dim,
             args.dim,
@@ -210,7 +212,8 @@ class Attention(nn.Module):
     ):
         bsz, seqlen, _ = x.shape
         xq = torch.stack([wq(x) for wq in self.wq], dim=2)
-        xk, xv = self.wk(x), self.wv(x)
+        xk = torch.stack([wk(x) for wk in self.wk], dim=2)
+        xv = torch.stack([wv(x) for wv in self.wv], dim=2)
 
         xq = xq.view(bsz, seqlen, self.n_local_heads, self.head_dim)
         xk = xk.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)

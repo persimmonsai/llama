@@ -39,21 +39,22 @@ def test_parallel_linear1(d1, d2, layer_id): return skip_init(nn.Linear, d1, d2,
 def test_parallel_embedding1(d1, d2, layer_id): return skip_init(nn.Embedding, d1, d2)
 
 class test_parallel_linear(nn.Linear):
-    def __init__(self, d1, d2, name, layer_id):
+    def __init__(self, d1, d2, name, layer_id, head):
         self.layer_id = layer_id
         self.name = name
+        self.head = head
         super().__init__(d1, d2, bias=False, device='meta')
         self.to_empty(device=device)
-    def forward(self, x, pid = 0):
+    def forward(self, x):
 #        return x.matmul(self.weight.t())
-        print(f"{self.name}/{self.layer_id}: x.shape={x.shape} weight.shape={self.weight.t().shape}", file=sys.stderr)
+        print(f"{self.name}/{self.layer_id}/{self.head}: x.shape={x.shape} weight.shape={self.weight.t().shape}", file=sys.stderr)
         return super().forward(x)
 
 class test_parallel_embedding(nn.Embedding):
     def __init__(self, d1, d2, layer_id):
         super().__init__(d1, d2, device='meta')
         self.to_empty(device=device)
-    def forward(self, x, pid = 0):
+    def forward(self, x):
         return super().forward(x)
 
 use_fairscale = False
@@ -165,25 +166,25 @@ class Attention(nn.Module):
         self.wq = nn.ModuleList([wqParallelLinear(
             args.dim,
             self.head_dim,
-            'wq', layer_id,
-        ) for _ in range(args.n_heads)])
+            'wq', layer_id, head,
+        ) for head in range(args.n_heads)])
 
         self.wk = nn.ModuleList([wkParallelLinear(
             args.dim,
             self.head_dim,
-            'wk', layer_id,
-        ) for _ in range(self.n_kv_heads)])
+            'wk', layer_id, head,
+        ) for head in range(self.n_kv_heads)])
 
         self.wv = nn.ModuleList([wvParallelLinear(
             args.dim,
             self.head_dim,
-            'wv', layer_id,
-        ) for _ in range(self.n_kv_heads)])
+            'wv', layer_id, head,
+        ) for head in range(self.n_kv_heads)])
 
         self.wo = woParallelLinear(
             args.n_heads * self.head_dim,
             args.dim,
-            'wo', layer_id,
+            'wo', layer_id, None
         )
 
         self.cache_k = torch.zeros(
@@ -266,13 +267,13 @@ class FeedForward(nn.Module):
         hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
 
         self.w1 = w1ParallelLinear(
-            dim, hidden_dim, 'w1', layer_id
+            dim, hidden_dim, 'w1', layer_id, None
         )
         self.w2 = w2ParallelLinear(
-            hidden_dim, dim, 'w2', layer_id
+            hidden_dim, dim, 'w2', layer_id, None
         )
         self.w3 = w3ParallelLinear(
-            dim, hidden_dim, 'w3', layer_id
+            dim, hidden_dim, 'w3', layer_id, None
         )
 
     def forward(self, x):
@@ -330,7 +331,7 @@ class Transformer(nn.Module):
 
         self.norm = RMSNorm(params.dim, eps=params.norm_eps)
         self.output = outputParallelLinear(
-            params.dim, params.vocab_size, 'out', None
+            params.dim, params.vocab_size, 'out', None, None
         )
 
         self.freqs_cis = precompute_freqs_cis(

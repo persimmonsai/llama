@@ -16,6 +16,7 @@ from fairscale.nn.model_parallel.layers import (
 from torch import nn
 
 from torch.nn.utils import skip_init
+import sys
 
 complex_device = torch.device("cpu")
 device = complex_device
@@ -38,18 +39,22 @@ def test_parallel_linear1(d1, d2, layer_id): return skip_init(nn.Linear, d1, d2,
 def test_parallel_embedding1(d1, d2, layer_id): return skip_init(nn.Embedding, d1, d2)
 
 class test_parallel_linear(nn.Linear):
-    def __init__(self, d1, d2, layer_id):
+    def __init__(self, d1, d2, name, layer_id):
+        self.layer_id = layer_id
+        self.name = name
         super().__init__(d1, d2, bias=False, device='meta')
         self.to_empty(device=device)
-    def forward(self, *args):
-        return super().forward(*args)
+    def forward(self, x, pid = 0):
+#        return x.matmul(self.weight.t())
+        print(f"{self.name}/{self.layer_id}: x.shape={x.shape} weight.shape={self.weight.t().shape}", file=sys.stderr)
+        return super().forward(x)
 
 class test_parallel_embedding(nn.Embedding):
     def __init__(self, d1, d2, layer_id):
         super().__init__(d1, d2, device='meta')
         self.to_empty(device=device)
-    def forward(self, *args):
-        return super().forward(*args)
+    def forward(self, x, pid = 0):
+        return super().forward(x)
 
 use_fairscale = False
 
@@ -155,26 +160,27 @@ class Attention(nn.Module):
         self.n_local_kv_heads = self.n_kv_heads // model_parallel_size
         self.n_rep = self.n_local_heads // self.n_local_kv_heads
         self.head_dim = args.dim // args.n_heads
+        self.layer_id = layer_id
 
         self.wq = wqParallelLinear(
             args.dim,
             args.n_heads * self.head_dim,
-            layer_id,
+            'wq', layer_id,
         )
         self.wk = wkParallelLinear(
             args.dim,
             self.n_kv_heads * self.head_dim,
-            layer_id,
+            'wk', layer_id,
         )
         self.wv = wvParallelLinear(
             args.dim,
             self.n_kv_heads * self.head_dim,
-            layer_id,
+            'wv', layer_id,
         )
         self.wo = woParallelLinear(
             args.n_heads * self.head_dim,
             args.dim,
-            layer_id,
+            'wo', layer_id,
         )
 
         self.cache_k = torch.zeros(
@@ -226,10 +232,12 @@ class Attention(nn.Module):
         xq = xq.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
         keys = keys.transpose(1, 2)
         values = values.transpose(1, 2)
+        print(f"at-scores/{self.layer_id}: xq.shape={xq.shape} keys.shape={keys.transpose(2, 3).shape}", file=sys.stderr)
         scores = torch.matmul(xq, keys.transpose(2, 3)) / math.sqrt(self.head_dim)
         if mask is not None:
             scores = scores + mask  # (bs, n_local_heads, seqlen, cache_len + seqlen)
         scores = F.softmax(scores.float(), dim=-1).type_as(xq)
+        print(f"at-out/{self.layer_id}: scores.shape={scores.shape} values.shape={values.shape}", file=sys.stderr)
         output = torch.matmul(scores, values)  # (bs, n_local_heads, seqlen, head_dim)
         output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
         return self.wo(output)
@@ -245,6 +253,7 @@ class FeedForward(nn.Module):
         layer_id: int,
     ):
         super().__init__()
+        self.layer_id = layer_id
         hidden_dim = int(2 * hidden_dim / 3)
         # custom dim factor multiplier
         if ffn_dim_multiplier is not None:
@@ -252,17 +261,20 @@ class FeedForward(nn.Module):
         hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
 
         self.w1 = w1ParallelLinear(
-            dim, hidden_dim, layer_id
+            dim, hidden_dim, 'w1', layer_id
         )
         self.w2 = w2ParallelLinear(
-            hidden_dim, dim, layer_id
+            hidden_dim, dim, 'w2', layer_id
         )
         self.w3 = w3ParallelLinear(
-            dim, hidden_dim, layer_id
+            dim, hidden_dim, 'w3', layer_id
         )
 
     def forward(self, x):
-        return self.w2(F.silu(self.w1(x)) * self.w3(x))
+        silu_w1_x = F.silu(self.w1(x))
+        w3_x = self.w3(x)
+        print(f"ff-out/{self.layer_id}: silu_w1_x.shape={silu_w1_x.shape} * w3_x.shape={w3_x.shape}", file=sys.stderr)
+        return self.w2(silu_w1_x * w3_x)
 
 def layer_id_map(layer_id, n_heads):
     return layer_id
@@ -317,7 +329,7 @@ class Transformer(nn.Module):
 
         self.norm = RMSNorm(params.dim, eps=params.norm_eps)
         self.output = outputParallelLinear(
-            params.dim, params.vocab_size, None
+            params.dim, params.vocab_size, 'out', None
         )
 
         self.freqs_cis = precompute_freqs_cis(

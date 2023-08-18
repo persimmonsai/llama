@@ -17,6 +17,7 @@ from torch import nn
 
 from torch.nn.utils import skip_init
 import sys
+import os
 
 complex_device = torch.device("cpu")
 device = complex_device
@@ -38,17 +39,39 @@ def test_parallel_linear1(d1, d2, layer_id): return skip_init(nn.Linear, d1, d2,
 
 def test_parallel_embedding1(d1, d2, layer_id): return skip_init(nn.Embedding, d1, d2)
 
+import numpy as np
+
+def debug_mult_output(r, a, b, name, start_pos, layer_id, head):
+    d = '/tmp/mdebug'
+    if not os.path.exists(d): os.mkdir(d)
+    
+    if(start_pos is not None):
+        d = d + '/S' + str(start_pos)
+        if not os.path.exists(d): os.mkdir(d)
+    if(layer_id is not None):
+        d = d + '/L' + str(layer_id)
+        if not os.path.exists(d): os.mkdir(d)
+    if(head is not None):
+        d = d + '/H' + str(head)
+        if not os.path.exists(d): os.mkdir(d)
+    #print(f"{name}/{layer_id}/{head}: a.shape={a.shape} b.shape={b.shape}", file=sys.stderr)
+    np.save(d + '/' + name + '-r.npy', r.cpu().numpy())
+    np.save(d + '/' + name + '-a.npy', a.cpu().numpy())
+    np.save(d + '/' + name + '-b.npy', b.cpu().numpy())
+
+    return r;
+
 class test_parallel_linear(nn.Linear):
     def __init__(self, d1, d2, name, layer_id, head):
         self.layer_id = layer_id
         self.name = name
         self.head = head
+        self.start_pos = None
         super().__init__(d1, d2, bias=False, device='meta')
         self.to_empty(device=device)
     def forward(self, x):
 #        return x.matmul(self.weight.t())
-        print(f"{self.name}/{self.layer_id}/{self.head}: x.shape={x.shape} weight.shape={self.weight.t().shape}", file=sys.stderr)
-        return super().forward(x)
+        return debug_mult_output(super().forward(x), x, self.weight.t(), self.name, self.start_pos, self.layer_id, self.head)
 
 class test_parallel_embedding(nn.Embedding):
     def __init__(self, d1, d2, layer_id):
@@ -212,6 +235,12 @@ class Attention(nn.Module):
         mask: Optional[torch.Tensor],
     ):
         bsz, seqlen, _ = x.shape
+        for wq in self.wq: wq.start_pos = start_pos
+        for wk in self.wk: wk.start_pos = start_pos
+        for wv in self.wv: wv.start_pos = start_pos
+
+        self.wo.start_pos = start_pos
+
         xq = torch.stack([wq(x) for wq in self.wq], dim=2)
         xk = torch.stack([wk(x) for wk in self.wk], dim=2)
         xv = torch.stack([wv(x) for wv in self.wv], dim=2)
@@ -238,13 +267,13 @@ class Attention(nn.Module):
         xq = xq.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
         keys = keys.transpose(1, 2)
         values = values.transpose(1, 2)
-        print(f"at-scores/{self.layer_id}: xq.shape={xq.shape} keys.shape={keys.transpose(2, 3).shape}", file=sys.stderr)
         scores = torch.matmul(xq, keys.transpose(2, 3)) / math.sqrt(self.head_dim)
+        debug_mult_output(scores, xq, keys.transpose(2, 3), 'at-scores', start_pos, self.layer_id, None)
         if mask is not None:
             scores = scores + mask  # (bs, n_local_heads, seqlen, cache_len + seqlen)
         scores = F.softmax(scores.float(), dim=-1).type_as(xq)
-        print(f"at-out/{self.layer_id}: scores.shape={scores.shape} values.shape={values.shape}", file=sys.stderr)
         output = torch.matmul(scores, values)  # (bs, n_local_heads, seqlen, head_dim)
+        debug_mult_output(output, scores, values, 'at-out', start_pos, self.layer_id, None)
         output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
         return self.wo(output)
 
@@ -276,11 +305,16 @@ class FeedForward(nn.Module):
             dim, hidden_dim, 'w3', layer_id, None
         )
 
-    def forward(self, x):
+    def forward(self, x, start_pos):
+        self.w1.start_pos = start_pos
+        self.w2.start_pos = start_pos
+        self.w3.start_pos = start_pos
+
         silu_w1_x = F.silu(self.w1(x))
         w3_x = self.w3(x)
-        print(f"ff-out/{self.layer_id}: silu_w1_x.shape={silu_w1_x.shape} * w3_x.shape={w3_x.shape}", file=sys.stderr)
-        return self.w2(silu_w1_x * w3_x)
+        r = self.w2(silu_w1_x * w3_x)
+        debug_mult_output(r, silu_w1_x, w3_x, 'ff-out', start_pos, self.layer_id, None)
+        return r
 
 class TransformerBlock(nn.Module):
     def __init__(self, layer_id: int, args: ModelArgs):
@@ -310,7 +344,7 @@ class TransformerBlock(nn.Module):
         h = x + self.attention.forward(
             self.attention_norm(x), start_pos, freqs_cis, mask
         )
-        out = h + self.feed_forward.forward(self.ffn_norm(h))
+        out = h + self.feed_forward.forward(self.ffn_norm(h), start_pos)
         return out
 
 

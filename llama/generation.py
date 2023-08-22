@@ -95,13 +95,14 @@ class Llama:
             sys.stdout = open(os.devnull, "w")
 
         start_time = time.time()
-        checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
+        checkpoints = sorted(list(Path(ckpt_dir).glob('*.pth'))+list(Path(ckpt_dir).glob('*.pt')))
         assert world_size == len(
             checkpoints
         ), f"Loading a checkpoint for MP={len(checkpoints)} but world size is {world_size}"
         ckpt_path = checkpoints[local_rank]
         print("Loading")
         checkpoint = torch.load(ckpt_path, map_location="cpu")
+        if 'model' in checkpoint: checkpoint = checkpoint['model']
         with open(Path(ckpt_dir) / "params.json", "r") as f:
             params = json.loads(f.read())
 

@@ -31,6 +31,7 @@ class ModelArgs:
     dim: int = 4096
     n_layers: int = 32
     n_heads: int = 32
+    n_kv_heads: Optional[int] = None
     vocab_size: int = -1  # defined later by tokenizer
     multiple_of: int = 256  # make SwiGLU hidden layer size multiple of large power of 2
     norm_eps: float = 1e-5
@@ -88,7 +89,9 @@ class Attention(nn.Module):
     def __init__(self, args: ModelArgs):
         super().__init__()
 
+        self.n_kv_heads = args.n_heads if args.n_kv_heads is None else args.n_kv_heads
         self.n_local_heads = args.n_heads // fs_init.get_model_parallel_world_size()
+        self.n_local_kv_heads = self.n_kv_heads // fs_init.get_model_parallel_world_size()
         self.head_dim = args.dim // args.n_heads
 
         self.wq = ColumnParallelLinear(
@@ -100,14 +103,14 @@ class Attention(nn.Module):
         )
         self.wk = ColumnParallelLinear(
             args.dim,
-            args.n_heads * self.head_dim,
+            self.n_kv_heads * self.head_dim,
             bias=False,
             gather_output=False,
             init_method=lambda x: x,
         )
         self.wv = ColumnParallelLinear(
             args.dim,
-            args.n_heads * self.head_dim,
+            self.n_kv_heads * self.head_dim,
             bias=False,
             gather_output=False,
             init_method=lambda x: x,
@@ -124,7 +127,7 @@ class Attention(nn.Module):
             (
                 args.max_batch_size,
                 args.max_seq_len,
-                self.n_local_heads,
+                self.n_local_kv_heads,
                 self.head_dim,
             )
         ).to(device)
@@ -132,7 +135,7 @@ class Attention(nn.Module):
             (
                 args.max_batch_size,
                 args.max_seq_len,
-                self.n_local_heads,
+                self.n_local_kv_heads,
                 self.head_dim,
             )
         ).to(device)
@@ -148,8 +151,8 @@ class Attention(nn.Module):
         xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
 
         xq = xq.view(bsz, seqlen, self.n_local_heads, self.head_dim)
-        xk = xk.view(bsz, seqlen, self.n_local_heads, self.head_dim)
-        xv = xv.view(bsz, seqlen, self.n_local_heads, self.head_dim)
+        xk = xk.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
+        xv = xv.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
 
         xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
 

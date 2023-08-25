@@ -61,6 +61,14 @@ def debug_mult_output(r, a, b, name, start_pos, layer_id, head):
 
     return r;
 
+def debug_mult(a, b, name, start_pos, layer_id, head):
+    r = torch.matmul(a, b)
+    debug_mult_output(r, a, b, name, start_pos, layer_id, head);
+    return r
+
+def debug_stacked_mult(a, b, name, start_pos, layer_id):
+    return torch.stack([ debug_mult(a[head], b[head], name, start_pos, layer_id, head) for head in range(len(a))])
+
 class test_parallel_linear(nn.Linear):
     def __init__(self, d1, d2, name, layer_id, head):
         self.layer_id = layer_id
@@ -212,17 +220,17 @@ class Attention(nn.Module):
 
         self.cache_k = torch.zeros(
             (
+                self.n_local_kv_heads,
                 args.max_batch_size,
                 args.max_seq_len,
-                self.n_local_kv_heads,
                 self.head_dim,
             )
         ).to(device)
         self.cache_v = torch.zeros(
             (
+                self.n_local_kv_heads,
                 args.max_batch_size,
                 args.max_seq_len,
-                self.n_local_kv_heads,
                 self.head_dim,
             )
         ).to(device)
@@ -245,35 +253,32 @@ class Attention(nn.Module):
         xk = torch.stack([wk(x) for wk in self.wk], dim=2)
         xv = torch.stack([wv(x) for wv in self.wv], dim=2)
 
-        xq = xq.view(bsz, seqlen, self.n_local_heads, self.head_dim)
-        xk = xk.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
-        xv = xv.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
-
         xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
+
+        xq = xq.permute(2, 0, 1, 3)
+        xk = xk.permute(2, 0, 1, 3)
+        xv = xv.permute(2, 0, 1, 3)
 
         self.cache_k = self.cache_k.to(xq)
         self.cache_v = self.cache_v.to(xq)
 
-        self.cache_k[:bsz, start_pos : start_pos + seqlen] = xk
-        self.cache_v[:bsz, start_pos : start_pos + seqlen] = xv
+        self.cache_k[:, :bsz, start_pos : start_pos + seqlen] = xk
+        self.cache_v[:, :bsz, start_pos : start_pos + seqlen] = xv
 
-        keys = self.cache_k[:bsz, : start_pos + seqlen]
-        values = self.cache_v[:bsz, : start_pos + seqlen]
+        keys = self.cache_k[:, :bsz, : start_pos + seqlen]
+        values = self.cache_v[:, :bsz, : start_pos + seqlen]
 
         # repeat k/v heads if n_kv_heads < n_heads
         keys = repeat_kv(keys, self.n_rep)  # (bs, seqlen, n_local_heads, head_dim)
         values = repeat_kv(values, self.n_rep)  # (bs, seqlen, n_local_heads, head_dim)
 
-        xq = xq.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
-        keys = keys.transpose(1, 2)
-        values = values.transpose(1, 2)
-        scores = torch.matmul(xq, keys.transpose(2, 3)) / math.sqrt(self.head_dim)
-        debug_mult_output(scores, xq, keys.transpose(2, 3), 'at-scores', start_pos, self.layer_id, None)
+        keys = keys.transpose(2,3)
+        scores = debug_stacked_mult(xq, keys, 'at-scores', start_pos, self.layer_id) / math.sqrt(self.head_dim)
         if mask is not None:
-            scores = scores + mask  # (bs, n_local_heads, seqlen, cache_len + seqlen)
+            scores = scores + mask
         scores = F.softmax(scores.float(), dim=-1).type_as(xq)
-        output = torch.matmul(scores, values)  # (bs, n_local_heads, seqlen, head_dim)
-        debug_mult_output(output, scores, values, 'at-out', start_pos, self.layer_id, None)
+        output = debug_stacked_mult(scores, values, 'at-out', start_pos, self.layer_id)
+        output = output.transpose(0, 1)
         output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
         return self.wo(output)
 

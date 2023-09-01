@@ -79,14 +79,15 @@ class test_parallel_linear(nn.Linear):
         self.to_empty(device=device)
     def forward(self, x):
 #        return x.matmul(self.weight.t())
-        return debug_mult_output(super().forward(x), x, self.weight.t(), self.name, self.start_pos, self.layer_id, self.head)
+        return debug_mult_output(super().forward(x), x, self.weight, self.name, self.start_pos, self.layer_id, self.head)
 
 class test_parallel_embedding(nn.Embedding):
-    def __init__(self, d1, d2, layer_id):
+    def __init__(self, d1, d2, name):
         super().__init__(d1, d2, device='meta')
         self.to_empty(device=device)
+        self.name = name
     def forward(self, x):
-        return super().forward(x)
+        return debug_mult_output(super().forward(x), x, self.weight, self.name, None, None, None)
 
 use_fairscale = False
 
@@ -361,7 +362,7 @@ class Transformer(nn.Module):
         self.n_layers = params.n_layers
 
         self.tok_embeddings = parallelEmbedding(
-            params.vocab_size, params.dim, None
+            params.vocab_size, params.dim, 'tok_emb'
         )
 
         self.layers = torch.nn.ModuleList()

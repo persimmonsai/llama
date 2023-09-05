@@ -84,7 +84,7 @@ class Generator:
             self.token_logprobs = torch.zeros_like(tokens, dtype=torch.float)
 
         self.prev_pos = 0
-        self.cur_pos = 1 #self.min_prompt_len
+        self.cur_pos = self.min_prompt_len
         self.eos_reached = torch.tensor([False] * self.bsz)
 
     def get_next_token(self):
@@ -92,13 +92,6 @@ class Generator:
         if self.cur_pos >= self.total_len: return None
 
         logits = self.model.forward(self.tokens[:, self.prev_pos:self.cur_pos], self.prev_pos)
-
-        if self.cur_pos < self.min_prompt_len:
-            self.prev_pos = self.cur_pos
-            self.cur_pos += 1
-            next_token = self.tokens[0, self.prev_pos:self.cur_pos]
-            return next_token
-
         if self.logprobs:
             self.token_logprobs[:, self.prev_pos + 1 : self.cur_pos + 1] = -F.cross_entropy(
                 input=logits.transpose(1, 2),

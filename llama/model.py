@@ -317,9 +317,9 @@ class FeedForward(nn.Module):
 
         silu_w1_x = F.silu(self.w1(x))
         w3_x = self.w3(x)
-        r = self.w2(silu_w1_x * w3_x)
+        r = silu_w1_x * w3_x
         debug_mult_output(r, silu_w1_x, w3_x, 'ff-out', start_pos, self.layer_id, None)
-        return r
+        return self.w2(r)
 
 class TransformerBlock(nn.Module):
     def __init__(self, layer_id: int, args: ModelArgs):

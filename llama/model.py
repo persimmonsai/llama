@@ -128,17 +128,20 @@ class ModelArgs:
 
 
 class RMSNorm(torch.nn.Module):
-    def __init__(self, dim: int, eps: float = 1e-6):
+    def __init__(self, dim: int, eps: float = 1e-6, name: str = None, layer: int = None):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
+        self.layer = layer
+        self.name = name
 
     def _norm(self, x):
         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
 
-    def forward(self, x):
+    def forward(self, x, start_pos = None):
         output = self._norm(x.float()).type_as(x)
-        return output * self.weight
+        r = output * self.weight
+        return debug_mult_output(r, output, self.weight, self.name, start_pos, self.layer, None)
 
 
 def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
@@ -337,8 +340,8 @@ class TransformerBlock(nn.Module):
             layer_id=layer_id,
         )
         self.layer_id = layer_id
-        self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps)
-        self.ffn_norm = RMSNorm(args.dim, eps=args.norm_eps)
+        self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps, name='att-norm', layer=layer_id)
+        self.ffn_norm = RMSNorm(args.dim, eps=args.norm_eps, name='ffn-norm', layer=layer_id)
 
     def forward(
         self,
@@ -348,9 +351,9 @@ class TransformerBlock(nn.Module):
         mask: Optional[torch.Tensor],
     ):
         h = x + self.attention.forward(
-            self.attention_norm(x), start_pos, freqs_cis, mask
+            self.attention_norm(x, start_pos), start_pos, freqs_cis, mask
         )
-        out = h + self.feed_forward.forward(self.ffn_norm(h), start_pos)
+        out = h + self.feed_forward.forward(self.ffn_norm(h, start_pos), start_pos)
         return out
 
 
@@ -369,7 +372,7 @@ class Transformer(nn.Module):
         for layer_id in range(params.n_layers):
             self.layers.append(TransformerBlock(layer_id, params))
 
-        self.norm = RMSNorm(params.dim, eps=params.norm_eps)
+        self.norm = RMSNorm(params.dim, eps=params.norm_eps, name='out-norm')
         self.output = outputParallelLinear(
             params.dim, params.vocab_size, 'out', None, None
         )

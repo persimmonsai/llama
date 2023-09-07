@@ -86,8 +86,8 @@ class test_parallel_embedding(nn.Embedding):
         super().__init__(d1, d2, device='meta')
         self.to_empty(device=device)
         self.name = name
-    def forward(self, x):
-        return debug_mult_output(super().forward(x), x, self.weight, self.name, None, None, None)
+    def forward(self, x, start_pos):
+        return debug_mult_output(super().forward(x), x, self.weight, self.name, start_pos, None, None)
 
 use_fairscale = False
 
@@ -365,7 +365,7 @@ class Transformer(nn.Module):
         self.n_layers = params.n_layers
 
         self.tok_embeddings = parallelEmbedding(
-            params.vocab_size, params.dim, 'tok_emb'
+            params.vocab_size, params.dim, 'tok-emb'
         )
 
         self.layers = torch.nn.ModuleList()
@@ -384,7 +384,7 @@ class Transformer(nn.Module):
     @torch.inference_mode()
     def forward(self, tokens: torch.Tensor, start_pos: int):
         _bsz, seqlen = tokens.shape
-        h = self.tok_embeddings(tokens)
+        h = self.tok_embeddings(tokens, start_pos)
         #self.freqs_cis = self.freqs_cis.float().to(h.device)
         freqs_cis = self.freqs_cis[start_pos : start_pos + seqlen]
 

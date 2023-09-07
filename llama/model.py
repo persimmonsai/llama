@@ -163,18 +163,14 @@ def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
 
 
 def apply_rotary_emb(
-    xq: torch.Tensor,
-    xk: torch.Tensor,
+    x: torch.Tensor,
     freqs_cis: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    xq = xq.to(freqs_cis.device)
-    xk = xk.to(freqs_cis.device)
-    xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
-    xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
-    freqs_cis = reshape_for_broadcast(freqs_cis, xq_)
-    xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
-    xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
-    return xq_out.type_as(xq).to(device), xk_out.type_as(xk).to(device)
+    x = x.to(freqs_cis.device)
+    x_ = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
+    freqs_cis = reshape_for_broadcast(freqs_cis, x_)
+    x_out = torch.view_as_real(x_ * freqs_cis).flatten(3)
+    return x_out.type_as(x).to(device)
 
 
 def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
@@ -259,7 +255,8 @@ class Attention(nn.Module):
         xk = torch.stack([wk(x) for wk in self.wk], dim=2)
         xv = torch.stack([wv(x) for wv in self.wv], dim=2)
 
-        xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
+        xq = apply_rotary_emb(xq, freqs_cis=freqs_cis)
+        xk = apply_rotary_emb(xk, freqs_cis=freqs_cis)
 
         xq = xq.permute(2, 0, 1, 3)
         xk = xk.permute(2, 0, 1, 3)

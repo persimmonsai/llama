@@ -41,7 +41,7 @@ def test_parallel_embedding1(d1, d2, layer_id): return skip_init(nn.Embedding, d
 
 import numpy as np
 
-def debug_mult_output(r, a, b, name, start_pos, layer_id, head):
+def debug_one(a, name, start_pos = None, layer_id = None, head = None):
     d = '/tmp/mdebug'
     if not os.path.exists(d): os.mkdir(d)
     
@@ -54,10 +54,12 @@ def debug_mult_output(r, a, b, name, start_pos, layer_id, head):
     if(head is not None):
         d = d + '/H' + str(head)
         if not os.path.exists(d): os.mkdir(d)
-    #print(f"{name}/{layer_id}/{head}: a.shape={a.shape} b.shape={b.shape}", file=sys.stderr)
-    np.save(d + '/' + name + '-r.npy', r.cpu().numpy())
-    np.save(d + '/' + name + '-a.npy', a.cpu().numpy())
-    np.save(d + '/' + name + '-b.npy', b.cpu().numpy())
+    np.save(d + '/' + name + '.npy', a.cpu().numpy())
+
+def debug_mult_output(r, a, b, name, start_pos = None, layer_id = None, head = None):
+    debug_one(r, name + '-r', start_pos, layer_id, head)
+    debug_one(a, name + '-a', start_pos, layer_id, head)
+    debug_one(b, name + '-b', start_pos, layer_id, head)
 
     return r;
 
@@ -87,7 +89,7 @@ class test_parallel_embedding(nn.Embedding):
         self.to_empty(device=device)
         self.name = name
     def forward(self, x, start_pos):
-        return debug_mult_output(super().forward(x), x, self.weight, self.name, start_pos, None, None)
+        return debug_mult_output(super().forward(x), x, self.weight, self.name, start_pos)
 
 use_fairscale = False
 
@@ -141,7 +143,7 @@ class RMSNorm(torch.nn.Module):
     def forward(self, x, start_pos = None):
         output = self._norm(x.float()).type_as(x)
         r = output * self.weight
-        return debug_mult_output(r, output, self.weight, self.name, start_pos, self.layer, None)
+        return debug_mult_output(r, output, self.weight, self.name, start_pos, self.layer)
 
 
 def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
@@ -322,7 +324,7 @@ class FeedForward(nn.Module):
         silu_w1_x = F.silu(self.w1(x))
         w3_x = self.w3(x)
         r = silu_w1_x * w3_x
-        debug_mult_output(r, silu_w1_x, w3_x, 'ff-out', start_pos, self.layer_id, None)
+        debug_mult_output(r, silu_w1_x, w3_x, 'ff-out', start_pos, self.layer_id)
         return self.w2(r)
 
 class TransformerBlock(nn.Module):
@@ -387,6 +389,7 @@ class Transformer(nn.Module):
         h = self.tok_embeddings(tokens, start_pos)
         #self.freqs_cis = self.freqs_cis.float().to(h.device)
         freqs_cis = self.freqs_cis[start_pos : start_pos + seqlen]
+        debug_one(freqs_cis, 'freqs-cis', start_pos)
 
         mask = None
         if seqlen > 1:

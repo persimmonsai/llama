@@ -153,11 +153,10 @@ class RMSNorm(torch.nn.Module):
 
 
 def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
-    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2, device=complex_device)[: (dim // 2)].float() / dim))
+    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end, device=freqs.device)  # type: ignore
     freqs = torch.outer(t, freqs).float()  # type: ignore
-    freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64
-    return freqs_cis
+    return ( torch.cos(freqs), torch.sin(freqs) )
 
 
 def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
@@ -170,13 +169,20 @@ def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
 
 def apply_rotary_emb(
     x: torch.Tensor,
-    freqs_cis: torch.Tensor,
+    freqs_cis: Tuple[torch.Tensor],
     start_pos = None, layer_id = None, head = None
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    x = x.to(freqs_cis.device)
-    x_ = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
-    freqs_cis = reshape_for_broadcast(freqs_cis, x_)
-    x_out = torch.view_as_real(x_ * freqs_cis).flatten(x.ndim-1)
+    ( freqs_cos, freqs_sin ) = freqs_cis
+
+    x_r, x_i = x.float().reshape(*x.shape[:-1], -1, 2).unbind(-1)
+
+    freqs_cos = reshape_for_broadcast(freqs_cos, x_r)
+    freqs_sin = reshape_for_broadcast(freqs_sin, x_i)
+
+    x_out_r = x_r * freqs_cos - x_i * freqs_sin
+    x_out_i = x_r * freqs_sin + x_i * freqs_cos
+
+    x_out = torch.stack((x_out_r, x_out_i), dim=-1).flatten(-2)
     debug_two(x_out, x, 'rot-emb', start_pos, layer_id, head)
     return x_out.type_as(x).to(device)
 
@@ -249,7 +255,7 @@ class Attention(nn.Module):
         self,
         x: torch.Tensor,
         start_pos: int,
-        freqs_cis: torch.Tensor,
+        freqs_cis: tuple[torch.Tensor],
         mask: Optional[torch.Tensor],
     ):
         bsz, seqlen, _ = x.shape
@@ -351,7 +357,7 @@ class TransformerBlock(nn.Module):
         self,
         x: torch.Tensor,
         start_pos: int,
-        freqs_cis: torch.Tensor,
+        freqs_cis: tuple[torch.Tensor],
         mask: Optional[torch.Tensor],
     ):
         h = x + self.attention.forward(
@@ -390,13 +396,14 @@ class Transformer(nn.Module):
         _bsz, seqlen = tokens.shape
         h = self.tok_embeddings(tokens, start_pos)
         #self.freqs_cis = self.freqs_cis.float().to(h.device)
-        freqs_cis = self.freqs_cis[start_pos : start_pos + seqlen]
-        debug_one(freqs_cis, 'freqs-cis', start_pos)
+        freqs_cis = ( self.freqs_cis[0][start_pos : start_pos + seqlen], self.freqs_cis[1][start_pos : start_pos + seqlen] )
+        debug_one(freqs_cis[0], 'freqs-cos', start_pos)
+        debug_one(freqs_cis[1], 'freqs-sin', start_pos)
 
         mask = None
         if seqlen > 1:
             mask = torch.full(
-                (1, 1, seqlen, seqlen), float("-inf"), device=freqs_cis.device
+                (1, 1, seqlen, seqlen), float("-inf"), device=complex_device
             )
             mask = torch.triu(mask, diagonal=start_pos + 1).type_as(h)
 

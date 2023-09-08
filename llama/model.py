@@ -165,6 +165,7 @@ def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
 def apply_rotary_emb(
     x: torch.Tensor,
     freqs_cis: torch.Tensor,
+    start_pos = None, head = None
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     x = x.to(freqs_cis.device)
     x_ = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
@@ -251,8 +252,8 @@ class Attention(nn.Module):
 
         self.wo.start_pos = start_pos
 
-        xq = torch.stack([apply_rotary_emb(wq(x), freqs_cis=freqs_cis) for wq in self.wq], dim=2)
-        xk = torch.stack([apply_rotary_emb(wk(x), freqs_cis=freqs_cis) for wk in self.wk], dim=2)
+        xq = torch.stack([apply_rotary_emb(self.wq[h](x), freqs_cis=freqs_cis, start_pos=start_pos, head=h) for h in range(len(self.wq))], dim=2)
+        xk = torch.stack([apply_rotary_emb(self.wk[h](x), freqs_cis=freqs_cis, start_pos=start_pos, head=h) for h in range(len(self.wk))], dim=2)
         xv = torch.stack([wv(x) for wv in self.wv], dim=2)
 
         xq = xq.permute(2, 0, 1, 3)

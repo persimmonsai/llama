@@ -169,7 +169,7 @@ def apply_rotary_emb(
     x = x.to(freqs_cis.device)
     x_ = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
     freqs_cis = reshape_for_broadcast(freqs_cis, x_)
-    x_out = torch.view_as_real(x_ * freqs_cis).flatten(3)
+    x_out = torch.view_as_real(x_ * freqs_cis).flatten(x.ndim-1)
     return x_out.type_as(x).to(device)
 
 
@@ -251,12 +251,9 @@ class Attention(nn.Module):
 
         self.wo.start_pos = start_pos
 
-        xq = torch.stack([wq(x) for wq in self.wq], dim=2)
-        xk = torch.stack([wk(x) for wk in self.wk], dim=2)
+        xq = torch.stack([apply_rotary_emb(wq(x), freqs_cis=freqs_cis) for wq in self.wq], dim=2)
+        xk = torch.stack([apply_rotary_emb(wk(x), freqs_cis=freqs_cis) for wk in self.wk], dim=2)
         xv = torch.stack([wv(x) for wv in self.wv], dim=2)
-
-        xq = apply_rotary_emb(xq, freqs_cis=freqs_cis)
-        xk = apply_rotary_emb(xk, freqs_cis=freqs_cis)
 
         xq = xq.permute(2, 0, 1, 3)
         xk = xk.permute(2, 0, 1, 3)

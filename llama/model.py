@@ -153,18 +153,18 @@ class RMSNorm(torch.nn.Module):
 
 
 def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
-    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
-    t = torch.arange(end, device=freqs.device)  # type: ignore
-    freqs = torch.outer(t, freqs).float()  # type: ignore
-    return ( torch.cos(freqs), torch.sin(freqs) )
+    freqs = 1.0 / (theta ** (np.arange(0, dim, 2)[: (dim // 2)].astype(np.float32) / dim))
+    t = np.arange(end)
+    freqs = np.outer(t, freqs).astype(np.float32)
+    return ( np.cos(freqs), np.sin(freqs) )
 
 
-def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
+def reshape_for_broadcast(freqs_cis, x):
     ndim = x.ndim
     assert 0 <= 1 < ndim
     assert freqs_cis.shape == (x.shape[1], x.shape[-1])
     shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
-    return freqs_cis.view(*shape)
+    return freqs_cis.reshape(*shape)
 
 
 def apply_rotary_emb(
@@ -173,8 +173,11 @@ def apply_rotary_emb(
     start_pos = None, layer_id = None, head = None
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     ( freqs_cos, freqs_sin ) = freqs_cis
+    x = x.cpu().numpy()
 
-    x_r, x_i = x.float().reshape(*x.shape[:-1], -1, 2).unbind(-1)
+    xf = x.astype(np.float32)
+    x_r = xf[..., 0::2]
+    x_i = xf[..., 1::2]
 
     freqs_cos = reshape_for_broadcast(freqs_cos, x_r)
     freqs_sin = reshape_for_broadcast(freqs_sin, x_i)
@@ -182,9 +185,8 @@ def apply_rotary_emb(
     x_out_r = x_r * freqs_cos - x_i * freqs_sin
     x_out_i = x_r * freqs_sin + x_i * freqs_cos
 
-    x_out = torch.stack((x_out_r, x_out_i), dim=-1).flatten(-2)
-    debug_two(x_out, x, 'rot-emb', start_pos, layer_id, head)
-    return x_out.type_as(x).to(device)
+    x_out = np.stack((x_out_r, x_out_i), axis=-1).reshape(*x_out_r.shape[:-1], -1)
+    return torch.from_numpy(x_out.astype(x.dtype)).to(device)
 
 
 def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
@@ -397,8 +399,8 @@ class Transformer(nn.Module):
         h = self.tok_embeddings(tokens, start_pos)
         #self.freqs_cis = self.freqs_cis.float().to(h.device)
         freqs_cis = ( self.freqs_cis[0][start_pos : start_pos + seqlen], self.freqs_cis[1][start_pos : start_pos + seqlen] )
-        debug_one(freqs_cis[0], 'freqs-cos', start_pos)
-        debug_one(freqs_cis[1], 'freqs-sin', start_pos)
+#        debug_one(freqs_cis[0], 'freqs-cos', start_pos)
+#        debug_one(freqs_cis[1], 'freqs-sin', start_pos)
 
         mask = None
         if seqlen > 1:

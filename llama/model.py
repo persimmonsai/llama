@@ -185,7 +185,7 @@ class Attention(nn.Module):
         scores = torch.stack([ torch.matmul(xq[i], keys[i]) for i in range(len(xq))]) / math.sqrt(self.head_dim)
         if mask is not None:
             scores = scores + mask
-        scores = F.softmax(scores.float(), dim=-1).type_as(xq)
+        scores = torch.stack([F.softmax(scores[h].float(), dim=-1).type_as(xq) for h in range(len(scores))])
         output = torch.stack([ torch.matmul(scores[i], values[i]) for i in range(len(values))])
         output=output.transpose(0,1)
         output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)

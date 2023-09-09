@@ -284,7 +284,7 @@ class Attention(nn.Module):
         scores = debug_stacked_mult(xq, keys, 'at-scores', start_pos, self.layer_id) / math.sqrt(self.head_dim)
         if mask is not None:
             scores = scores + mask
-        scores = F.softmax(scores.float(), dim=-1).type_as(xq)
+        scores = debug_two(F.softmax(scores.float(), dim=-1).type_as(xq), scores, 'at-softmax', start_pos, self.layer_id)
         output = debug_stacked_mult(scores, values, 'at-out', start_pos, self.layer_id)
         output = output.transpose(0, 1)
         output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)

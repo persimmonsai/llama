@@ -42,7 +42,10 @@ def test_parallel_embedding1(d1, d2, layer_id): return skip_init(nn.Embedding, d
 import numpy as np
 
 def debug_one(a, name, start_pos = None, layer_id = None, head = None):
-    d = '/tmp/mdebug'
+    d = '/dev/shm'
+    if not os.path.exists(d): d = '/tmp'
+    d += '/mdebug'
+
     if not os.path.exists(d): os.mkdir(d)
     
     if(start_pos is not None):

@@ -62,7 +62,7 @@ def debug_two(r, a, name, start_pos = None, layer_id = None, head = None):
 
     return r
 
-def debug_mult_output(r, a, b, name, start_pos = None, layer_id = None, head = None):
+def debug_three(r, a, b, name, start_pos = None, layer_id = None, head = None):
     debug_one(r, name + '-r', start_pos, layer_id, head)
     debug_one(a, name + '-a', start_pos, layer_id, head)
     debug_one(b, name + '-b', start_pos, layer_id, head)
@@ -71,7 +71,7 @@ def debug_mult_output(r, a, b, name, start_pos = None, layer_id = None, head = N
 
 def debug_mult(a, b, name, start_pos, layer_id, head):
     r = torch.matmul(a, b)
-    debug_mult_output(r, a, b, name, start_pos, layer_id, head);
+    debug_three(r, a, b, name, start_pos, layer_id, head);
     return r
 
 def debug_stacked_mult(a, b, name, start_pos, layer_id):
@@ -87,7 +87,7 @@ class test_parallel_linear(nn.Linear):
         self.to_empty(device=device)
     def forward(self, x):
 #        return x.matmul(self.weight.t())
-        return debug_mult_output(super().forward(x), x, self.weight, self.name, self.start_pos, self.layer_id, self.head)
+        return debug_three(super().forward(x), x, self.weight, self.name, self.start_pos, self.layer_id, self.head)
 
 class test_parallel_embedding(nn.Embedding):
     def __init__(self, d1, d2, name):
@@ -95,7 +95,7 @@ class test_parallel_embedding(nn.Embedding):
         self.to_empty(device=device)
         self.name = name
     def forward(self, x, start_pos):
-        return debug_mult_output(super().forward(x), x, self.weight, self.name, start_pos)
+        return debug_three(super().forward(x), x, self.weight, self.name, start_pos)
 
 use_fairscale = False
 
@@ -149,7 +149,7 @@ class RMSNorm(torch.nn.Module):
     def forward(self, x, start_pos = None):
         output = self._norm(x.float()).type_as(x)
         r = output * self.weight
-        return debug_mult_output(r, output, self.weight, self.name, start_pos, self.layer)
+        return debug_three(r, output, self.weight, self.name, start_pos, self.layer)
 
 
 def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
@@ -332,7 +332,7 @@ class FeedForward(nn.Module):
         silu_w1_x = F.silu(self.w1(x))
         w3_x = self.w3(x)
         r = silu_w1_x * w3_x
-        debug_mult_output(r, silu_w1_x, w3_x, 'ff-out', start_pos, self.layer_id)
+        debug_three(r, silu_w1_x, w3_x, 'ff-out', start_pos, self.layer_id)
         return self.w2(r)
 
 class TransformerBlock(nn.Module):

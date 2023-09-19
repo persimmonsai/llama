@@ -178,7 +178,7 @@ class Llama:
         elif torch.cuda.is_available():
             torch.set_default_dtype(torch.float16)
         else:
-            torch.set_default_dtype(torch.bfloat16)
+            torch.set_default_dtype(torch.float32)
         model = Transformer(model_args)
 
         for layer_id in range(params['n_layers']):

@@ -376,7 +376,7 @@ class TransformerBlock(nn.Module):
         debug_one(rms, 'wo-rms', start_pos, self.layer_id, None)
 
         out = h + self.feed_forward.forward(self.ffn_norm(h, start_pos), start_pos)
-        debug_one(h, 'w2-add', start_pos, self.layer_id, None)
+        debug_one(out, 'w2-add', start_pos, self.layer_id, None)
         return out
 
 

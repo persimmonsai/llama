@@ -291,6 +291,7 @@ class Attention(nn.Module):
 
         keys = keys.transpose(2,3)
         scores = debug_stacked_mult(xq, keys, 'at-scores', start_pos, self.layer_id) / math.sqrt(self.head_dim)
+        for h in range(len(scores)): debug_one(scores, 'scores-div', start_pos, self.layer_id, h)
         if mask is not None:
             scores = scores + mask
         scores = torch.stack([debug_two(F.softmax(scores[h].float(), dim=-1).type_as(xq), scores[h], 'at-softmax', start_pos, self.layer_id, h) for h in range(len(scores))])
@@ -363,10 +364,14 @@ class TransformerBlock(nn.Module):
         freqs_cis: tuple[torch.Tensor],
         mask: Optional[torch.Tensor],
     ):
-        h = x + self.attention.forward(
+        h1 = self.attention.forward(
             self.attention_norm(x, start_pos), start_pos, freqs_cis, mask
         )
+        h = x + h1
+        debug_one(x, 'wo-x', start_pos, self.layer_id)
+        debug_one(h, 'wo-add', start_pos, self.layer_id)
         out = h + self.feed_forward.forward(self.ffn_norm(h, start_pos), start_pos)
+        debug_one(out, 'w2-add', start_pos, self.layer_id)
         return out
 
 
@@ -400,6 +405,8 @@ class Transformer(nn.Module):
         h = self.tok_embeddings(tokens, start_pos)
         #self.freqs_cis = self.freqs_cis.float().to(h.device)
         freqs_cis = ( self.freqs_cis[0][start_pos : start_pos + seqlen], self.freqs_cis[1][start_pos : start_pos + seqlen] )
+        self.output.start_pos = start_pos
+
         debug_one(freqs_cis[0], 'freqs-cos', start_pos)
         debug_one(freqs_cis[1], 'freqs-sin', start_pos)
 

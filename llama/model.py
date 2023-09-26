@@ -351,6 +351,7 @@ class TransformerBlock(nn.Module):
             layer_id=layer_id,
         )
         self.layer_id = layer_id
+        self.eps = args.norm_eps
         self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps, name='att-norm', layer=layer_id)
         self.ffn_norm = RMSNorm(args.dim, eps=args.norm_eps, name='ffn-norm', layer=layer_id)
 
@@ -361,10 +362,21 @@ class TransformerBlock(nn.Module):
         freqs_cis: tuple[torch.Tensor],
         mask: Optional[torch.Tensor],
     ):
-        h = x + self.attention.forward(
+        h1 = self.attention.forward(
             self.attention_norm(x, start_pos), start_pos, freqs_cis, mask
         )
+        h = x + h1
+
+        xnorm = h.pow(2).mean(-1)
+        rms = torch.rsqrt(xnorm + self.eps)
+        debug_one(h, 'wo-add', start_pos, self.layer_id, None)
+        debug_one(h1, 'wo-pre', start_pos, self.layer_id, None)
+        debug_one(x, 'wo-x', start_pos, self.layer_id, None)
+        debug_one(xnorm, 'wo-norm', start_pos, self.layer_id, None)
+        debug_one(rms, 'wo-rms', start_pos, self.layer_id, None)
+
         out = h + self.feed_forward.forward(self.ffn_norm(h, start_pos), start_pos)
+        debug_one(h, 'w2-add', start_pos, self.layer_id, None)
         return out
 
 

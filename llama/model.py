@@ -18,6 +18,7 @@ from torch import nn
 from torch.nn.utils import skip_init
 import sys
 import os
+import pickle
 
 complex_device = torch.device("cpu")
 device = complex_device
@@ -58,6 +59,7 @@ def debug_one(a, name, start_pos = None, layer_id = None, head = None):
         d = d + '/H' + str(head)
         if not os.path.exists(d): os.mkdir(d)
     np.save(d + '/' + name + '.npy', a.cpu().numpy())
+    with open(d + '/' + name + '.pkl', 'wb') as f: pickle.dump(a.cpu().numpy().tolist(), file=f)
 
 def debug_two(r, a, name, start_pos = None, layer_id = None, head = None):
     debug_one(r, name + '-r', start_pos, layer_id, head)

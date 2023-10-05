@@ -36,9 +36,9 @@ for ckpt_file in checkpoints:
 
     out_dir.mkdir(parents=True, exist_ok=True)
     for k, v in checkpoint.items():
-        tens = v.to(torch.float32).numpy()
-        np.save(out_dir / ( k + '.npy'), tens)
-#        with open (out_dir / ( k + '.pkl'), 'wb') as f:
-#            pickle.dump(v, f)
+        v = v.to(torch.float32).numpy()
+        np.save(out_dir / ( k + '.npy'), v)
+        with open (out_dir / ( k + '.pkl'), 'wb') as f:
+            pickle.dump(v.tolist(), f)
     checkpoint = None
 print(f"Weights stored in {out_dir}")

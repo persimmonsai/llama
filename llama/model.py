@@ -3,9 +3,8 @@
 
 import math
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
-import fairscale.nn.model_parallel.initialize as fs_init
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -14,16 +13,18 @@ from torch import nn
 @dataclass
 class ModelArgs:
     dim: int = 4096
+    hidden_dim: int = 16384
+    head_dim: int = 128
     n_layers: int = 32
     n_heads: int = 32
     n_kv_heads: Optional[int] = None
     vocab_size: int = -1  # defined later by tokenizer
-    multiple_of: int = 256  # make SwiGLU hidden layer size multiple of large power of 2
-    ffn_dim_multiplier: Optional[float] = None
     norm_eps: float = 1e-5
 
     max_batch_size: int = 32
     max_seq_len: int = 2048
+
+    moe: Optional[Dict[str, int]] = None
 
 
 class RMSNorm(torch.nn.Module):
@@ -296,8 +297,6 @@ class FeedForward(nn.Module):
         self,
         dim: int,
         hidden_dim: int,
-        multiple_of: int,
-        ffn_dim_multiplier: Optional[float],
     ):
         """
         Initialize the FeedForward module.
@@ -315,11 +314,6 @@ class FeedForward(nn.Module):
 
         """
         super().__init__()
-        hidden_dim = int(2 * hidden_dim / 3)
-        # custom dim factor multiplier
-        if ffn_dim_multiplier is not None:
-            hidden_dim = int(ffn_dim_multiplier * hidden_dim)
-        hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
 
         self.w1 = nn.Linear(
             dim, hidden_dim, bias=False
@@ -332,7 +326,37 @@ class FeedForward(nn.Module):
         )
 
     def forward(self, x):
-        return self.w2(F.silu(self.w1(x)) * self.w3(x))
+        device = x.device
+        x = x.to(self.w1.weight.device)
+        return self.w2(F.silu(self.w1(x)) * self.w3(x)).to(device)
+
+
+class MoE(nn.Module):
+    def __init__(
+        self,
+        num_experts: int,
+        num_experts_per_tok: int,
+        **kwargs,
+    ):
+        super().__init__()
+        self.experts = nn.ModuleList([FeedForward(**kwargs).to(f"cuda:{i//4}") for i in range(num_experts)])
+        self.gate = nn.Linear(kwargs["dim"], num_experts, bias=False)
+        self.num_experts_per_tok = num_experts_per_tok
+
+    def forward(self, x):
+        orig_shape = x.shape
+        x = x.view(-1, x.shape[-1])
+
+        scores = self.gate(x).softmax(dim=-1)
+        expert_weights, expert_indices = torch.topk(scores, self.num_experts_per_tok, dim=-1)
+        flat_expert_indices = expert_indices.view(-1)
+
+        x = x.repeat_interleave(self.num_experts_per_tok, dim=0)
+        y = torch.empty_like(x)
+        for i, expert in enumerate(self.experts):
+            y[flat_expert_indices == i] = expert(x[flat_expert_indices == i])
+        y = (y.view(*expert_weights.shape, -1) * expert_weights.unsqueeze(-1)).sum(dim=1)
+        return y.view(*orig_shape)
 
 
 class TransformerBlock(nn.Module):
@@ -360,11 +384,10 @@ class TransformerBlock(nn.Module):
         self.dim = args.dim
         self.head_dim = args.dim // args.n_heads
         self.attention = Attention(args)
-        self.feed_forward = FeedForward(
+        self.feed_forward = MoE(
             dim=args.dim,
-            hidden_dim=4 * args.dim,
-            multiple_of=args.multiple_of,
-            ffn_dim_multiplier=args.ffn_dim_multiplier,
+            hidden_dim=args.hidden_dim,
+            **args.moe,
         )
         self.layer_id = layer_id
         self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps)

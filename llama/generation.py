@@ -6,7 +6,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import List, Literal, Optional, Tuple, TypedDict
+from typing import List, Optional, Tuple, TypedDict
 
 import torch
 import torch.nn.functional as F
@@ -17,14 +17,7 @@ from fairscale.nn.model_parallel.initialize import (
 )
 
 from llama.model import ModelArgs, Transformer
-from llama.tokenizer import Tokenizer
-
-Role = Literal["system", "user", "assistant"]
-
-
-class Message(TypedDict):
-    role: Role
-    content: str
+from llama.tokenizer import Dialog, Message, MessageFormat, Tokenizer
 
 
 class CompletionPrediction(TypedDict, total=False):
@@ -37,15 +30,6 @@ class ChatPrediction(TypedDict, total=False):
     generation: Message
     tokens: List[str]  # not required
     logprobs: List[float]  # not required
-
-
-Dialog = List[Message]
-
-B_INST, E_INST = "[INST]", "[/INST]"
-B_SYS, E_SYS = "<<SYS>>\n", "\n<</SYS>>\n\n"
-
-SPECIAL_TAGS = [B_INST, E_INST, "<<SYS>>", "<</SYS>>"]
-UNSAFE_ERROR = "Error: special tags are not allowed as part of the prompt."
 
 
 class Llama:
@@ -114,7 +98,7 @@ class Llama:
             **params,
         )
         tokenizer = Tokenizer(model_path=tokenizer_path)
-        model_args.vocab_size = tokenizer.n_words
+        assert model_args.vocab_size == tokenizer.n_words
         torch.set_default_tensor_type(torch.cuda.HalfTensor)
         model = Transformer(model_args)
         model.load_state_dict(checkpoint, strict=False)
@@ -125,6 +109,7 @@ class Llama:
     def __init__(self, model: Transformer, tokenizer: Tokenizer):
         self.model = model
         self.tokenizer = tokenizer
+        self.formatter = MessageFormat(tokenizer)
 
     @torch.inference_mode()
     def generate(
@@ -183,6 +168,8 @@ class Llama:
                 ignore_index=pad_id,
             )
 
+        stop_tokens = torch.tensor(list(self.tokenizer.stop_tokens))
+
         for cur_pos in range(min_prompt_len, total_len):
             logits = self.model.forward(tokens[:, prev_pos:cur_pos], prev_pos)
             if temperature > 0:
@@ -205,7 +192,7 @@ class Llama:
                     ignore_index=pad_id,
                 )
             eos_reached |= (~input_text_mask[:, cur_pos]) & (
-                next_token == self.tokenizer.eos_id
+                torch.isin(next_token, stop_tokens)
             )
             prev_pos = cur_pos
             if all(eos_reached):
@@ -221,11 +208,14 @@ class Llama:
             probs = None
             if logprobs:
                 probs = token_logprobs[i][start : len(prompt_tokens[i]) + max_gen_len]
-            # cut to eos tok if any
-            if self.tokenizer.eos_id in toks:
-                eos_idx = toks.index(self.tokenizer.eos_id)
-                toks = toks[:eos_idx]
-                probs = probs[:eos_idx] if logprobs else None
+            # cut to after eos tok if any
+            for stop_token in self.tokenizer.stop_tokens:
+                try:
+                    eos_idx = toks.index(stop_token)
+                    toks = toks[: eos_idx + 1]
+                    probs = probs[: eos_idx + 1] if logprobs else None
+                except ValueError:
+                    pass
             out_tokens.append(toks)
             out_logprobs.append(probs)
         return (out_tokens, out_logprobs if logprobs else None)
@@ -274,7 +264,7 @@ class Llama:
             return [
                 {
                     "generation": self.tokenizer.decode(t),
-                    "tokens": [self.tokenizer.decode(x) for x in t],
+                    "tokens": [self.tokenizer.decode([x]) for x in t],
                     "logprobs": logprobs_i,
                 }
                 for t, logprobs_i in zip(generation_tokens, generation_logprobs)
@@ -315,52 +305,11 @@ class Llama:
         """
         if max_gen_len is None:
             max_gen_len = self.model.params.max_seq_len - 1
-        prompt_tokens = []
-        unsafe_requests = []
-        for dialog in dialogs:
-            unsafe_requests.append(
-                any([tag in msg["content"] for tag in SPECIAL_TAGS for msg in dialog])
-            )
-            if dialog[0]["role"] == "system":
-                dialog = [
-                    {
-                        "role": dialog[1]["role"],
-                        "content": B_SYS
-                        + dialog[0]["content"]
-                        + E_SYS
-                        + dialog[1]["content"],
-                    }
-                ] + dialog[2:]
-            assert all([msg["role"] == "user" for msg in dialog[::2]]) and all(
-                [msg["role"] == "assistant" for msg in dialog[1::2]]
-            ), (
-                "model only supports 'system', 'user' and 'assistant' roles, "
-                "starting with 'system', then 'user' and alternating (u/a/u/a/u...)"
-            )
-            dialog_tokens: List[int] = sum(
-                [
-                    self.tokenizer.encode(
-                        f"{B_INST} {(prompt['content']).strip()} {E_INST} {(answer['content']).strip()} ",
-                        bos=True,
-                        eos=True,
-                    )
-                    for prompt, answer in zip(
-                        dialog[::2],
-                        dialog[1::2],
-                    )
-                ],
-                [],
-            )
-            assert (
-                dialog[-1]["role"] == "user"
-            ), f"Last message must be from user, got {dialog[-1]['role']}"
-            dialog_tokens += self.tokenizer.encode(
-                f"{B_INST} {(dialog[-1]['content']).strip()} {E_INST}",
-                bos=True,
-                eos=False,
-            )
-            prompt_tokens.append(dialog_tokens)
 
+        prompt_tokens = [
+            self.formatter.encode_dialog(dialog, bos=True, eos=False)
+            for dialog in dialogs
+        ]
         generation_tokens, generation_logprobs = self.generate(
             prompt_tokens=prompt_tokens,
             max_gen_len=max_gen_len,
@@ -371,27 +320,15 @@ class Llama:
         if logprobs:
             return [
                 {
-                    "generation": {
-                        "role": "assistant",
-                        "content": self.tokenizer.decode(t)
-                        if not unsafe
-                        else UNSAFE_ERROR,
-                    },
-                    "tokens": [self.tokenizer.decode(x) for x in t],
+                    "generation": self.formatter.decode_message(t).message,
+                    "tokens": [self.tokenizer.decode([x]) for x in t],
                     "logprobs": logprobs_i,
                 }
-                for t, logprobs_i, unsafe in zip(
-                    generation_tokens, generation_logprobs, unsafe_requests
-                )
+                for t, logprobs_i in zip(generation_tokens, generation_logprobs)
             ]
         return [
-            {
-                "generation": {
-                    "role": "assistant",
-                    "content": self.tokenizer.decode(t) if not unsafe else UNSAFE_ERROR,
-                }
-            }
-            for t, unsafe in zip(generation_tokens, unsafe_requests)
+            {"generation": self.formatter.decode_message(t).message}
+            for t in generation_tokens
         ]
 
 

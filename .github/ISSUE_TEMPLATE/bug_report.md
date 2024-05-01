@@ -1,10 +1,6 @@
 ---
 name: Bug report
 about: Create a report to help us reproduce and fix the issue
-title: ''
-labels: ''
-assignees: ''
-
 ---
 
 **Before submitting a bug, please make sure the issue hasn't been already addressed by searching through the [FAQs](https://ai.meta.com/llama/faq/) and [existing/past issues](https://github.com/facebookresearch/llama/issues)**
@@ -27,7 +23,7 @@ assignees: ''
 ```
 
 ## Runtime Environment
-- Model: [eg: `llama-2-7b-chat`]
+- Model: [eg: `meta-llama-3-8b-instruct`]
 - Using via huggingface?: [yes/no]
 - OS: [eg. Linux/Ubuntu, Windows]
 - GPU VRAM: 
